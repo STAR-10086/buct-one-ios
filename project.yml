@@ -1,0 +1,159 @@
+name: BuctOne
+options:
+  bundleIdPrefix: com.buct.one
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+
+packages:
+  BuctCore:
+    path: Packages/BuctCore
+
+targets:
+  BuctOne:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes:
+          - Entitlements/**
+          - Generated/**
+    settings:
+      base:
+        PRODUCT_NAME: BuctOne
+        PRODUCT_BUNDLE_IDENTIFIER: com.buct.one
+        CODE_SIGN_ENTITLEMENTS: App/Entitlements/BuctOneStandard.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_STRICT_CONCURRENCY: complete
+    info:
+      path: App/Generated/BuctOne-Info.plist
+      properties:
+        CFBundleDisplayName: 北化一站
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        LSApplicationQueriesSchemes:
+          - wxwork
+          - weixin
+          - alipay
+          - sidestore
+          - altstore
+        NSFaceIDUsageDescription: 用于通过面容 ID 验证北化通行密钥
+        BUCTEdition: standard
+        BUCTElectricitySignSecret: $(ELECTRICITY_SIGN_SECRET)
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            tree.buct.edu.cn:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+    dependencies:
+      - package: BuctCore
+        product: BuctModel
+      - package: BuctCore
+        product: BuctStore
+      - package: BuctCore
+        product: BuctSync
+
+  BuctOneWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: WidgetExtension
+        excludes:
+          - "*.entitlements"
+          - Generated/**
+    settings:
+      base:
+        PRODUCT_NAME: BuctOneWidgets
+        PRODUCT_BUNDLE_IDENTIFIER: com.buct.one.full.widgets
+        SKIP_INSTALL: YES
+        CODE_SIGN_ENTITLEMENTS: WidgetExtension/BuctOneWidgets.entitlements
+        SWIFT_STRICT_CONCURRENCY: complete
+    info:
+      path: WidgetExtension/Generated/Widgets-Info.plist
+      properties:
+        CFBundleDisplayName: 北化一站小组件
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        BUCTAppGroupIdentifier: group.com.buct.one.full
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    dependencies:
+      - package: BuctCore
+        product: BuctModel
+      - package: BuctCore
+        product: BuctStore
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+
+  BuctOneFull:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes:
+          - Entitlements/**
+          - Generated/**
+    settings:
+      base:
+        PRODUCT_NAME: BuctOne
+        PRODUCT_BUNDLE_IDENTIFIER: com.buct.one.full
+        CODE_SIGN_ENTITLEMENTS: App/Entitlements/BuctOneFull.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_STRICT_CONCURRENCY: complete
+    info:
+      path: App/Generated/BuctOneFull-Info.plist
+      properties:
+        CFBundleDisplayName: 北化一站
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        LSApplicationQueriesSchemes:
+          - wxwork
+          - weixin
+          - alipay
+          - sidestore
+          - altstore
+        NSFaceIDUsageDescription: 用于通过面容 ID 验证北化通行密钥
+        BUCTEdition: widgets
+        BUCTAppGroupIdentifier: group.com.buct.one.full
+        BUCTElectricitySignSecret: $(ELECTRICITY_SIGN_SECRET)
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            tree.buct.edu.cn:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+    dependencies:
+      - package: BuctCore
+        product: BuctModel
+      - package: BuctCore
+        product: BuctStore
+      - package: BuctCore
+        product: BuctSync
+      - target: BuctOneWidgets
+        embed: true
+        codeSign: false
+
+schemes:
+  BuctOne:
+    build:
+      targets:
+        BuctOne: all
+    archive:
+      config: Release
+  BuctOneFull:
+    build:
+      targets:
+        BuctOneFull: all
+    archive:
+      config: Release

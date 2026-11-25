@@ -1,0 +1,119 @@
+name: code-check
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'NOTICE'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'NOTICE'
+  workflow_dispatch:
+
+concurrency:
+  group: code-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Static architecture & security rules
+        run: |
+          set -euo pipefail
+          v=0
+
+          check_hit() {
+            local dir="$1"
+            local pattern="$2"
+            local desc="$3"
+            [ -e "$dir" ] || return 0
+            local hits
+            hits=$(grep -rnE "$pattern" "$dir" 2>/dev/null || true)
+            if [ -n "$hits" ]; then
+              echo "::error::${desc}:"
+              echo "$hits"
+              v=1
+            fi
+          }
+
+          # 1. BuctModel 只能 import Foundation
+          model_bad=$(grep -rnE '^import ' Packages/BuctCore/Sources/BuctModel 2>/dev/null | grep -vE 'import Foundation$' || true)
+          if [ -n "$model_bad" ]; then
+            echo "::error::BuctModel 仅允许 import Foundation:"
+            echo "$model_bad"
+            v=1
+          fi
+
+          # 2. 分层依赖检查
+          check_hit "Packages/BuctCore/Sources/BuctStore" "import (BuctNetwork|BuctSources|BuctSync|SwiftUI|UIKit)" "BuctStore 越层依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSources" "import (BuctStore|BuctSync|SwiftUI|UIKit)" "BuctSources 越层依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSync" "import (SwiftUI|UIKit)" "BuctSync 禁止依赖 UI 框架"
+          check_hit "App" "import BuctSources" "App 禁止直接依赖 BuctSources"
+          check_hit "WidgetExtension" "import BuctSources" "WidgetExtension 禁止直接依赖 BuctSources"
+
+          # 3. 安全与自签红线
+          trust_hits=$(grep -rnE 'URLCredential\s*\(\s*trust:' Packages App WidgetExtension 2>/dev/null | grep -v 'BuctTlsDelegate.swift' || true)
+          if [ -n "$trust_hits" ]; then
+            echo "::error::禁止在 BuctTlsDelegate.swift 之外构造 URLCredential(trust:):"
+            echo "$trust_hits"
+            v=1
+          fi
+
+          check_hit "project.yml" "NSAllowsArbitraryLoads" "禁止开启全局 NSAllowsArbitraryLoads"
+          check_hit "Packages" "kSecAttrAccessGroup" "禁止显式设置 kSecAttrAccessGroup（破坏免费签与 LiveContainer）"
+          check_hit "App" "kSecAttrAccessGroup" "禁止显式设置 kSecAttrAccessGroup"
+          check_hit "App/Entitlements" "aps-environment|com\.apple\.developer\.icloud|associated-domains" "禁止声明免费自签不支持的受限 Entitlements"
+          check_hit "WidgetExtension" "aps-environment|com\.apple\.developer\.icloud|associated-domains" "禁止声明免费自签不支持的受限 Entitlements"
+
+          if [ "$v" = 0 ]; then
+            echo "静态分层与安全/自签门禁通过"
+          else
+            exit 1
+          fi
+
+      - name: Run BuctCore unit tests
+        run: swift test --package-path Packages/BuctCore
+
+      - name: Install XcodeGen & generate project
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen generate --spec project.yml
+
+      - name: Build BuctOne (Standard) without signing
+        run: |
+          xcodebuild build \
+            -project BuctOne.xcodeproj \
+            -scheme BuctOne \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/dd-check-standard \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO
+
+      - name: Build BuctOneFull (Widgets) without signing
+        run: |
+          xcodebuild build \
+            -project BuctOne.xcodeproj \
+            -scheme BuctOneFull \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/dd-check-widgets \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO

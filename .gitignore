@@ -1,0 +1,26 @@
+# Xcode / XcodeGen
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+build/
+dist/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Secrets
+Config/Secrets.xcconfig
+
+# Build artifacts
+*.ipa
+*.xcarchive
+*.dSYM
+*.dSYM.zip
+
+# macOS / Windows
+.DS_Store
+Thumbs.db
+desktop.ini

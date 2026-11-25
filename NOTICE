@@ -1,0 +1,20 @@
+# NOTICE
+
+## 许可
+
+本项目基于 [BUCT One（buct-one）](https://github.com/STAR-10086/buct-one) 的架构与协议设计重新实现，整体遵循 **GNU General Public License v3.0 (GPL-3.0)** 开源协议发布，全文见 [LICENSE](LICENSE)。
+
+## 上游与开源致谢
+
+1. **[BUCT One (Android)](https://github.com/STAR-10086/buct-one)**（GPL-3.0）
+   - 提供北化统一身份认证（`sidportal.buct.edu.cn` AES-ECB / 短信二次验证 / 软件通行密钥 / 校方双链 TLS）、Wengine WebVPN（`w.buct.edu.cn` AES-128-CFB）及 11 个校园数据域的协议设计、分层约束与数据层四条铁律。
+2. **[SwiftSoup](https://github.com/scinfu/SwiftSoup)**（MIT）
+   - 纯 Swift HTML 解析库，用于承接正方教务、北化在线、校园邮箱等页面的 DOM 提取。
+3. **[Phosphor Icons](https://github.com/phosphor-icons/core)**（MIT）
+   - 双色矢量图标语言参考。
+
+## 隐私与安全声明
+
+- 应用无自建业务后端，不上传学号或密码，不集成任何第三方商业统计、广告或崩溃上报 SDK。
+- 校园数据快照仅保存在本机（或受自签权限约束的本地沙盒），会话凭据仅通过 iOS Keychain 存储且强制使用 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` 排除云备份与设备迁移。
+- 匿名使用统计仅连接自托管 Umami（`https://stats.buct.one`），仅使用本地随机生成的 `UUIDv4`，不采集学号、姓名、IDFA/IDFV 或硬件指纹，且可在「我的 → 数据与安全」随时关闭。

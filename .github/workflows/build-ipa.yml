@@ -1,0 +1,316 @@
+name: build-ipa
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'NOTICE'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - 'NOTICE'
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: '构建完成后发布 GitHub Release 与 R2 源'
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Release 标签名（如 v0.1.0）'
+        required: false
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      publish_release:
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ (inputs.publish_release && '0') || '1' }}
+
+      - name: Resolve version & validate release tag
+        id: ver
+        env:
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          VER_NAME=$(grep -E '^MARKETING_VERSION\s*=' Config/Version.xcconfig | sed 's/.*=\s*//' | tr -d '[:space:]')
+          VER_CODE=$(grep -E '^CURRENT_PROJECT_VERSION\s*=' Config/Version.xcconfig | sed 's/.*=\s*//' | tr -d '[:space:]')
+          if [ -z "$VER_NAME" ] || [ -z "$VER_CODE" ]; then
+            echo "::error::Config/Version.xcconfig 缺少版本号"
+            exit 1
+          fi
+          if [ "${PUBLISH_RELEASE:-false}" = "true" ] && [ -n "${RELEASE_TAG:-}" ]; then
+            if [ "v${VER_NAME}" != "${RELEASE_TAG}" ]; then
+              echo "::error::版本不一致: v${VER_NAME} != ${RELEASE_TAG}"
+              exit 1
+            fi
+          fi
+          echo "version_name=${VER_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${VER_CODE}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VER_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare optional secrets xcconfig
+        env:
+          ELECTRICITY_SIGN_SECRET: ${{ secrets.ELECTRICITY_SIGN_SECRET }}
+        run: |
+          if [ -n "${ELECTRICITY_SIGN_SECRET:-}" ]; then
+            printf 'ELECTRICITY_SIGN_SECRET = %s\n' "$ELECTRICITY_SIGN_SECRET" > Config/Secrets.xcconfig
+          fi
+
+      - name: Install XcodeGen & generate project
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen generate --spec project.yml
+
+      - name: Archive & package unsigned IPAs
+        env:
+          VER_NAME: ${{ steps.ver.outputs.version_name }}
+        run: |
+          set -euo pipefail
+          rm -rf build dist
+          mkdir -p build/standard build/widgets dist
+
+          # 1. 标准无扩展版
+          xcodebuild archive \
+            -project BuctOne.xcodeproj \
+            -scheme BuctOne \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/standard/BuctOne.xcarchive \
+            -derivedDataPath build/dd-standard \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO
+
+          STD_APP="build/standard/BuctOne.xcarchive/Products/Applications/BuctOne.app"
+          if [ -d "${STD_APP}/PlugIns" ]; then
+            echo "::error::标准版 IPA 不得包含 PlugIns 扩展"
+            exit 1
+          fi
+          mkdir -p build/payload-std/Payload
+          cp -R "$STD_APP" build/payload-std/Payload/
+          STD_IPA="buct-one-ios-v${VER_NAME}-unsigned.ipa"
+          (cd build/payload-std && zip -qr "../../dist/${STD_IPA}" Payload)
+
+          # 2. 完整小组件版
+          xcodebuild archive \
+            -project BuctOne.xcodeproj \
+            -scheme BuctOneFull \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/widgets/BuctOne.xcarchive \
+            -derivedDataPath build/dd-widgets \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO
+
+          FULL_APP="build/widgets/BuctOne.xcarchive/Products/Applications/BuctOne.app"
+          if [ ! -d "${FULL_APP}/PlugIns/BuctOneWidgets.appex" ]; then
+            echo "::error::完整小组件版缺少 PlugIns/BuctOneWidgets.appex"
+            exit 1
+          fi
+          mkdir -p build/payload-full/Payload
+          cp -R "$FULL_APP" build/payload-full/Payload/
+          FULL_IPA="buct-one-ios-v${VER_NAME}-widgets-unsigned.ipa"
+          (cd build/payload-full && zip -qr "../../dist/${FULL_IPA}" Payload)
+
+          # 3. SHA-256 与体积门禁
+          cd dist
+          for f in *.ipa; do
+            shasum -a 256 "$f" > "${f}.sha256"
+            size_bytes=$(stat -f%z "$f")
+            size_mb=$((size_bytes / 1024 / 1024))
+            echo "${f}: ${size_bytes} bytes (~${size_mb} MB)"
+            if [ "$size_bytes" -gt 52428800 ]; then
+              echo "::error::${f} 超过 50MB 体积硬门禁"
+              exit 1
+            elif [ "$size_bytes" -gt 31457280 ]; then
+              echo "::warning::${f} 超过 30MB 体积预警"
+            fi
+          done
+
+      - name: Generate SideStore / AltStore source manifest (apps.json)
+        env:
+          VER_NAME: ${{ steps.ver.outputs.version_name }}
+          VER_CODE: ${{ steps.ver.outputs.version_code }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REPO_FULL_NAME: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import datetime, json, os, re
+
+          ver = os.environ["VER_NAME"]
+          build_ver = os.environ["VER_CODE"]
+          tag = os.environ.get("RELEASE_TAG") or f"v{ver}"
+          repo = os.environ.get("REPO_FULL_NAME", "STAR-10086/buct-one-ios")
+
+          std_name = f"buct-one-ios-v{ver}-unsigned.ipa"
+          full_name = f"buct-one-ios-v{ver}-widgets-unsigned.ipa"
+          std_size = os.path.getsize(f"dist/{std_name}")
+          full_size = os.path.getsize(f"dist/{full_name}")
+
+          notes = f"BUCT One iOS {tag}"
+          if os.path.exists("CHANGELOG.md"):
+              ch = open("CHANGELOG.md", encoding="utf-8").read()
+              m = re.search(rf"##\s+v{re.escape(ver)}\b[^\n]*\n(.*?)(?=\n##\s+v|\Z)", ch, re.S)
+              if m and m.group(1).strip():
+                  notes = m.group(1).strip()
+
+          with open("dist/release-notes.md", "w", encoding="utf-8") as f:
+              f.write(notes + "\n")
+
+          today_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          std_url = "https://dl.buct.one/ios/latest/buct-one-ios-latest.ipa"
+          full_url = "https://dl.buct.one/ios/latest/buct-one-ios-widgets-latest.ipa"
+          icon_url = "https://dl.buct.one/ios/icon.png"
+
+          source = {
+              "name": "BUCT One · 北化一站",
+              "identifier": "one.buct.ios.source",
+              "sourceURL": "https://update.buct.one/ios/apps.json",
+              "apps": [
+                  {
+                      "name": "北化一站 (标准版)",
+                      "bundleIdentifier": "com.buct.one",
+                      "developerName": "STAR-10086",
+                      "subtitle": "兼容 LiveContainer / 免费自签 (无小组件扩展)",
+                      "localizedDescription": "面向北京化工大学师生的 iOS 26 原生液态玻璃校园工作台。标准版不含桌面小组件扩展，仅占 1 个 App ID，100% 兼容 LiveContainer 与免费 Apple ID 自签。",
+                      "iconURL": icon_url,
+                      "tintColor": "0A84FF",
+                      "downloadURL": std_url,
+                      "size": std_size,
+                      "version": ver,
+                      "versionDate": today_iso,
+                      "versionDescription": notes,
+                      "versions": [
+                          {
+                              "version": ver,
+                              "buildVersion": build_ver,
+                              "date": today_iso,
+                              "localizedDescription": notes,
+                              "downloadURL": std_url,
+                              "size": std_size,
+                              "minOSVersion": "26.0"
+                          }
+                      ]
+                  },
+                  {
+                      "name": "北化一站 (小组件版)",
+                      "bundleIdentifier": "com.buct.one.full",
+                      "developerName": "STAR-10086",
+                      "subtitle": "含 WidgetKit 桌面小组件 (SideStore / 证书推荐)",
+                      "localizedDescription": "面向北京化工大学师生的 iOS 26 原生液态玻璃校园工作台。内嵌 WidgetKit 桌面小组件扩展，支持 SideStore / AltStore 与个人证书自签。",
+                      "iconURL": icon_url,
+                      "tintColor": "0A84FF",
+                      "downloadURL": full_url,
+                      "size": full_size,
+                      "version": ver,
+                      "versionDate": today_iso,
+                      "versionDescription": notes,
+                      "versions": [
+                          {
+                              "version": ver,
+                              "buildVersion": build_ver,
+                              "date": today_iso,
+                              "localizedDescription": notes,
+                              "downloadURL": full_url,
+                              "size": full_size,
+                              "minOSVersion": "26.0"
+                          }
+                      ]
+                  }
+              ],
+              "news": []
+          }
+
+          with open("dist/apps.json", "w", encoding="utf-8") as f:
+              json.dump(source, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          PY
+
+      - name: Upload IPA artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: buct-one-ios-unsigned-ipas
+          path: |
+            dist/*.ipa
+            dist/*.sha256
+            dist/apps.json
+
+      - name: Publish GitHub Release
+        if: inputs.publish_release == true && inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          name: "BUCT One iOS ${{ inputs.release_tag }}"
+          prerelease: ${{ contains(inputs.release_tag, '-') }}
+          body_path: dist/release-notes.md
+          files: |
+            dist/*.ipa
+            dist/*.sha256
+            dist/apps.json
+          fail_on_unmatched_files: true
+
+      - name: Upload release assets to Cloudflare R2
+        if: inputs.publish_release == true && inputs.release_tag != '' && !contains(inputs.release_tag, '-')
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          VER_NAME: ${{ steps.ver.outputs.version_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${R2_ENDPOINT:-}" ] || [ -z "${R2_ACCESS_KEY_ID:-}" ] || [ -z "${R2_SECRET_ACCESS_KEY:-}" ]; then
+            echo "::error::缺少 Cloudflare R2 secrets"
+            exit 1
+          fi
+          export AWS_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}"
+          export AWS_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}"
+          export AWS_DEFAULT_REGION="auto"
+          export AWS_EC2_METADATA_DISABLED="true"
+
+          BUCKET="buct-one"
+          CLEAN_ENDPOINT="${R2_ENDPOINT%/}"
+          CLEAN_ENDPOINT="${CLEAN_ENDPOINT%/${BUCKET}}"
+          CACHE="public, max-age=60, stale-while-revalidate=300"
+
+          aws s3 cp "dist/buct-one-ios-v${VER_NAME}-unsigned.ipa" "s3://${BUCKET}/ios/latest/buct-one-ios-latest.ipa" \
+            --endpoint-url "${CLEAN_ENDPOINT}" --no-progress --content-type "application/octet-stream" --cache-control "${CACHE}"
+          aws s3 cp "dist/buct-one-ios-v${VER_NAME}-widgets-unsigned.ipa" "s3://${BUCKET}/ios/latest/buct-one-ios-widgets-latest.ipa" \
+            --endpoint-url "${CLEAN_ENDPOINT}" --no-progress --content-type "application/octet-stream" --cache-control "${CACHE}"
+          aws s3 cp "dist/apps.json" "s3://${BUCKET}/ios/apps.json" \
+            --endpoint-url "${CLEAN_ENDPOINT}" --no-progress --content-type "application/json; charset=utf-8" --cache-control "${CACHE}"
+          aws s3 cp "App/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png" "s3://${BUCKET}/ios/icon.png" \
+            --endpoint-url "${CLEAN_ENDPOINT}" --no-progress --content-type "image/png" --cache-control "${CACHE}"
