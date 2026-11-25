@@ -11,11 +11,18 @@ extension View {
     }
 }
 
+/// 严格对齐 Android DashboardRoute 的 4 列自由坐标栅格：
+/// - gap = 10pt
+/// - cellH = 76pt (1 rowSpan)
+/// - MINI = 1×1 (cellW × 76), MEDIUM = 2×2 ((2*cellW+10) × 162), LARGE = 4×2 (full × 162)
 struct WorkbenchGridLayout: Layout {
-    let spacing: CGFloat
+    static let cellHeight: CGFloat = 76
+    static let spacing: CGFloat = 10
 
-    init(spacing: CGFloat = 10) {
-        self.spacing = spacing
+    let minRows: Int
+
+    init(minRows: Int = 0) {
+        self.minRows = minRows
     }
 
     func sizeThatFits(
@@ -24,14 +31,12 @@ struct WorkbenchGridLayout: Layout {
         cache: inout ()
     ) -> CGSize {
         let totalWidth = proposal.width ?? 360
-        let unitSize = halfUnitSize(for: totalWidth)
-        let maxRowUnit = subviews
-            .compactMap { $0[WorkbenchSlotKey.self] }
-            .map { $0.rowUnit + $0.size.rowUnits }
-            .max() ?? 2
-
-        let height = CGFloat(maxRowUnit) * unitSize + CGFloat(max(0, maxRowUnit / 2 - 1)) * spacing
-        return CGSize(width: totalWidth, height: max(height, unitSize * 2))
+        let maxRow = max(
+            minRows,
+            subviews.compactMap { $0[WorkbenchSlotKey.self] }.map { $0.row + $0.size.rowSpan }.max() ?? 2
+        )
+        let height = CGFloat(maxRow) * Self.cellHeight + CGFloat(max(0, maxRow - 1)) * Self.spacing
+        return CGSize(width: totalWidth, height: max(height, Self.cellHeight * 2))
     }
 
     func placeSubviews(
@@ -40,16 +45,16 @@ struct WorkbenchGridLayout: Layout {
         subviews: Subviews,
         cache: inout ()
     ) {
-        let unitSize = halfUnitSize(for: bounds.width)
-        let halfGap = spacing / 2
+        let cellW = Self.cellWidth(for: bounds.width)
+        let gap = Self.spacing
 
         for subview in subviews {
             guard let slot = subview[WorkbenchSlotKey.self] else { continue }
 
-            let x = bounds.minX + CGFloat(slot.colUnit) * (unitSize + halfGap)
-            let y = bounds.minY + CGFloat(slot.rowUnit) * (unitSize + halfGap)
-            let w = CGFloat(slot.size.colUnits) * unitSize + CGFloat(max(0, slot.size.colUnits - 1)) * halfGap
-            let h = CGFloat(slot.size.rowUnits) * unitSize + CGFloat(max(0, slot.size.rowUnits - 1)) * halfGap
+            let x = bounds.minX + CGFloat(slot.col) * (cellW + gap)
+            let y = bounds.minY + CGFloat(slot.row) * (Self.cellHeight + gap)
+            let w = CGFloat(slot.size.colSpan) * cellW + CGFloat(max(0, slot.size.colSpan - 1)) * gap
+            let h = CGFloat(slot.size.rowSpan) * Self.cellHeight + CGFloat(max(0, slot.size.rowSpan - 1)) * gap
 
             subview.place(
                 at: CGPoint(x: x, y: y),
@@ -59,10 +64,8 @@ struct WorkbenchGridLayout: Layout {
         }
     }
 
-    private func halfUnitSize(for totalWidth: CGFloat) -> CGFloat {
-        let totalUnits = CGFloat(DashboardLayout.totalColUnits)
-        let halfGap = spacing / 2
-        let gaps = (totalUnits - 1) * halfGap
-        return max(24, (totalWidth - gaps) / totalUnits)
+    static func cellWidth(for totalWidth: CGFloat) -> CGFloat {
+        let cols = CGFloat(DashboardLayout.totalCols)
+        return max(44, (totalWidth - spacing * (cols - 1)) / cols)
     }
 }

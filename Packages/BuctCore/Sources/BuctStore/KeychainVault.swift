@@ -24,7 +24,7 @@ public enum KeychainVaultError: Error, LocalizedError, Sendable, Equatable {
 }
 
 /// 隔离式 Keychain 封装：
-/// - 严禁显式设置 kSecAttrAccessGroup（避免免费签与 LiveContainer 报 -34018）
+/// - 严禁显式设置 AccessGroup（避免免费签与 LiveContainer 报 -34018）
 /// - 统一使用 kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly 排除 iCloud 备份与换机迁移
 public struct KeychainVault: Sendable {
     public let namespace: KeychainVaultNamespace

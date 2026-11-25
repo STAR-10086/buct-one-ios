@@ -1,6 +1,22 @@
 import BuctModel
 import Foundation
 
+public struct OfficialCalendarPrefs: Codable, Sendable, Equatable {
+    public var manualOverrideTerms: Set<String>
+    public var semesterStartMondays: [String: String]
+    public var selectedTermId: String?
+
+    public init(
+        manualOverrideTerms: Set<String> = [],
+        semesterStartMondays: [String: String] = [:],
+        selectedTermId: String? = nil
+    ) {
+        self.manualOverrideTerms = manualOverrideTerms
+        self.semesterStartMondays = semesterStartMondays
+        self.selectedTermId = selectedTermId
+    }
+}
+
 public actor PreferencesStore {
     private let rootDirectory: URL
     private let encoder = JSONEncoder()
@@ -11,7 +27,7 @@ public actor PreferencesStore {
     }
 
     public func loadDashboardLayout() -> DashboardLayout {
-        let url = rootDirectory.appendingPathComponent("dashboard_layout.json")
+        let url = rootDirectory.appendingPathComponent("dashboard_layout_v2.json")
         guard let data = try? Data(contentsOf: url),
               let layout = try? decoder.decode(DashboardLayout.self, from: data) else {
             return .default
@@ -20,26 +36,54 @@ public actor PreferencesStore {
     }
 
     public func saveDashboardLayout(_ layout: DashboardLayout) throws {
-        let url = rootDirectory.appendingPathComponent("dashboard_layout.json")
-        try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
-        let data = try encoder.encode(layout)
-        try data.write(to: url, options: [.atomic])
+        try saveJSON(layout, filename: "dashboard_layout_v2.json")
     }
 
     public func loadAppearanceConfig() -> AppearanceConfig {
-        let url = rootDirectory.appendingPathComponent("appearance_config.json")
-        guard let data = try? Data(contentsOf: url),
-              let config = try? decoder.decode(AppearanceConfig.self, from: data) else {
-            return AppearanceConfig()
-        }
-        return config
+        loadJSON(AppearanceConfig.self, filename: "appearance_config.json") ?? AppearanceConfig()
     }
 
     public func saveAppearanceConfig(_ config: AppearanceConfig) throws {
-        let url = rootDirectory.appendingPathComponent("appearance_config.json")
-        try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
-        let data = try encoder.encode(config)
-        try data.write(to: url, options: [.atomic])
+        try saveJSON(config, filename: "appearance_config.json")
+    }
+
+    public func loadProfile() -> UserAccountProfile? {
+        loadJSON(UserAccountProfile.self, filename: "active_profile.json")
+    }
+
+    public func saveProfile(_ profile: UserAccountProfile) throws {
+        try saveJSON(profile, filename: "active_profile.json")
+    }
+
+    public func clearProfile() {
+        let url = rootDirectory.appendingPathComponent("active_profile.json")
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    public func loadReminderConfig() -> ReminderConfig {
+        loadJSON(ReminderConfig.self, filename: "reminder_config.json") ?? ReminderConfig()
+    }
+
+    public func saveReminderConfig(_ config: ReminderConfig) throws {
+        try saveJSON(config, filename: "reminder_config.json")
+    }
+
+    public func loadCalendarPrefs(accountKey: String) -> OfficialCalendarPrefs {
+        let safeKey = Self.sanitizeKey(accountKey)
+        return loadJSON(OfficialCalendarPrefs.self, filename: "calendar_prefs_\(safeKey).json") ?? OfficialCalendarPrefs()
+    }
+
+    public func saveCalendarPrefs(_ prefs: OfficialCalendarPrefs, accountKey: String) throws {
+        let safeKey = Self.sanitizeKey(accountKey)
+        try saveJSON(prefs, filename: "calendar_prefs_\(safeKey).json")
+    }
+
+    public func loadTodayWidgetSnapshot() -> TodayWidgetSnapshot? {
+        loadJSON(TodayWidgetSnapshot.self, filename: "today_widget_snapshot.json")
+    }
+
+    public func saveTodayWidgetSnapshot(_ snapshot: TodayWidgetSnapshot) throws {
+        try saveJSON(snapshot, filename: "today_widget_snapshot.json")
     }
 
     public func getOrCreateInstallID() -> String {
@@ -65,5 +109,22 @@ public actor PreferencesStore {
         let url = rootDirectory.appendingPathComponent("umami_last_launch_day")
         try? FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
         try? day.data(using: .utf8)?.write(to: url, options: [.atomic])
+    }
+
+    private func loadJSON<T: Decodable>(_ type: T.Type, filename: String) -> T? {
+        let url = rootDirectory.appendingPathComponent(filename)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? decoder.decode(T.self, from: data)
+    }
+
+    private func saveJSON<T: Encodable>(_ value: T, filename: String) throws {
+        let url = rootDirectory.appendingPathComponent(filename)
+        try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
+        let data = try encoder.encode(value)
+        try data.write(to: url, options: [.atomic])
+    }
+
+    private static func sanitizeKey(_ key: String) -> String {
+        key.replacingOccurrences(of: "[^A-Za-z0-9_\\-]", with: "_", options: .regularExpression)
     }
 }

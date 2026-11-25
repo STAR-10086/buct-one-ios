@@ -93,35 +93,35 @@ public enum DashboardModule: String, Codable, Sendable, CaseIterable, Identifiab
     public var targetMilestone: String {
         switch self {
         case .emptyClassroom:
-            return "M1 · 核心学业"
+            return "M1 · 已上线"
         case .homeworkTodo, .theolCourse, .jwNotice, .iBuct, .campusMail, .electricity, .campusNet:
-            return "M2 · 在线教学与高频域"
+            return "M2 · 已上线"
         case .campusCard, .secondClass, .practiceTeaching, .physicalFitness, .courseSelection:
-            return "M3 · 校内全域与选课"
+            return "M3 · 已上线"
         }
     }
 }
 
 public enum CardSize: String, Codable, Sendable, CaseIterable {
-    case large2x1
-    case medium1x1
     case miniHalf
+    case medium1x1
+    case large2x1
 
-    /// 以 0.5 列为单位（4 大列 = 8 个半格单位）
-    public var colUnits: Int {
+    /// 基于 4 列栅格的列跨度：MINI = 1, MEDIUM = 2, LARGE = 4
+    public var colSpan: Int {
         switch self {
-        case .large2x1: return 4
-        case .medium1x1: return 2
         case .miniHalf: return 1
+        case .medium1x1: return 2
+        case .large2x1: return 4
         }
     }
 
-    /// 以 0.5 行为单位（1 行 = 2 个半格单位）
-    public var rowUnits: Int {
+    /// 基于 76pt 行单位的行跨度：MINI = 1, MEDIUM = 2, LARGE = 2
+    public var rowSpan: Int {
         switch self {
-        case .large2x1: return 2
-        case .medium1x1: return 2
         case .miniHalf: return 1
+        case .medium1x1: return 2
+        case .large2x1: return 2
         }
     }
 
@@ -145,21 +145,21 @@ public enum CardSize: String, Codable, Sendable, CaseIterable {
 public struct DashboardCardSlot: Codable, Sendable, Equatable, Identifiable {
     public let module: DashboardModule
     public var size: CardSize
-    public var colUnit: Int
-    public var rowUnit: Int
+    public var col: Int
+    public var row: Int
 
     public var id: String { module.rawValue }
 
-    public init(module: DashboardModule, size: CardSize, colUnit: Int, rowUnit: Int) {
+    public init(module: DashboardModule, size: CardSize, col: Int, row: Int) {
         self.module = module
         self.size = size
-        self.colUnit = colUnit
-        self.rowUnit = rowUnit
+        self.col = col
+        self.row = row
     }
 }
 
 public struct DashboardLayout: Codable, Sendable, Equatable {
-    public static let totalColUnits = 8
+    public static let totalCols = 4
     public var slots: [DashboardCardSlot]
 
     public init(slots: [DashboardCardSlot]) {
@@ -172,64 +172,107 @@ public struct DashboardLayout: Codable, Sendable, Equatable {
     }
 
     public static let `default`: DashboardLayout = DashboardLayout(slots: [
-        DashboardCardSlot(module: .homeworkTodo, size: .large2x1, colUnit: 0, rowUnit: 0),
-        DashboardCardSlot(module: .theolCourse, size: .large2x1, colUnit: 4, rowUnit: 0),
-        DashboardCardSlot(module: .campusCard, size: .medium1x1, colUnit: 0, rowUnit: 2),
-        DashboardCardSlot(module: .electricity, size: .medium1x1, colUnit: 2, rowUnit: 2),
-        DashboardCardSlot(module: .campusNet, size: .medium1x1, colUnit: 4, rowUnit: 2),
-        DashboardCardSlot(module: .iBuct, size: .medium1x1, colUnit: 6, rowUnit: 2),
-        DashboardCardSlot(module: .jwNotice, size: .medium1x1, colUnit: 0, rowUnit: 4),
-        DashboardCardSlot(module: .campusMail, size: .medium1x1, colUnit: 2, rowUnit: 4),
-        DashboardCardSlot(module: .secondClass, size: .medium1x1, colUnit: 4, rowUnit: 4),
-        DashboardCardSlot(module: .practiceTeaching, size: .medium1x1, colUnit: 6, rowUnit: 4),
-        DashboardCardSlot(module: .physicalFitness, size: .medium1x1, colUnit: 0, rowUnit: 6),
-        DashboardCardSlot(module: .emptyClassroom, size: .medium1x1, colUnit: 2, rowUnit: 6),
-        DashboardCardSlot(module: .courseSelection, size: .large2x1, colUnit: 4, rowUnit: 6)
+        DashboardCardSlot(module: .homeworkTodo, size: .large2x1, col: 0, row: 0),
+        DashboardCardSlot(module: .secondClass, size: .medium1x1, col: 0, row: 2),
+        DashboardCardSlot(module: .campusCard, size: .medium1x1, col: 2, row: 2),
+        DashboardCardSlot(module: .practiceTeaching, size: .large2x1, col: 0, row: 4),
+        DashboardCardSlot(module: .emptyClassroom, size: .medium1x1, col: 0, row: 6),
+        DashboardCardSlot(module: .courseSelection, size: .medium1x1, col: 2, row: 6),
+        DashboardCardSlot(module: .physicalFitness, size: .medium1x1, col: 0, row: 8),
+        DashboardCardSlot(module: .campusMail, size: .medium1x1, col: 2, row: 8),
+        DashboardCardSlot(module: .iBuct, size: .medium1x1, col: 0, row: 10),
+        DashboardCardSlot(module: .jwNotice, size: .medium1x1, col: 2, row: 10),
+        DashboardCardSlot(module: .electricity, size: .medium1x1, col: 0, row: 12),
+        DashboardCardSlot(module: .campusNet, size: .medium1x1, col: 2, row: 12),
+        DashboardCardSlot(module: .theolCourse, size: .large2x1, col: 0, row: 14)
     ])
 
     /// 寻找可容纳指定尺寸的第一个空位并追加模块
     public mutating func addModule(_ module: DashboardModule, size: CardSize = .medium1x1) {
         guard !slots.contains(where: { $0.module == module }) else { return }
-        let placement = firstAvailablePosition(for: size)
-        slots.append(DashboardCardSlot(module: module, size: size, colUnit: placement.colUnit, rowUnit: placement.rowUnit))
+        let placement = Self.firstAvailablePosition(for: size, against: slots)
+        slots.append(DashboardCardSlot(module: module, size: size, col: placement.col, row: placement.row))
     }
 
-    /// 切换指定卡片尺寸；若原位放不下则自动就近顺移
+    /// 切换指定卡片尺寸；若原位或边界冲突则自动执行碰撞重排
     public mutating func cycleSize(for module: DashboardModule) {
         guard let index = slots.firstIndex(where: { $0.module == module }) else { return }
         let nextSize = slots[index].size.next
         let current = slots[index]
-        let others = slots.enumerated().filter { $0.offset != index }.map(\.element)
-        if Self.canPlace(size: nextSize, atCol: current.colUnit, row: current.rowUnit, against: others) {
-            slots[index].size = nextSize
-        } else {
-            let fallback = Self.firstAvailablePosition(for: nextSize, against: others)
-            slots[index] = DashboardCardSlot(
-                module: module,
-                size: nextSize,
-                colUnit: fallback.colUnit,
-                rowUnit: fallback.rowUnit
-            )
-        }
+        let clampedCol = min(max(0, current.col), Self.totalCols - nextSize.colSpan)
+        slots[index].size = nextSize
+        slots[index].col = clampedCol
+        resolvePlacement(moving: module, toCol: clampedCol, row: current.row)
     }
 
     public mutating func removeModule(_ module: DashboardModule) {
         slots.removeAll { $0.module == module }
     }
 
-    private func firstAvailablePosition(for size: CardSize) -> (colUnit: Int, rowUnit: Int) {
-        Self.firstAvailablePosition(for: size, against: slots)
+    /// 对应 Android resolveGridPlacement：支持单卡可逆互换与碰撞向下顺移
+    public mutating func resolvePlacement(moving module: DashboardModule, toCol: Int, row toRow: Int) {
+        guard let activeIndex = slots.firstIndex(where: { $0.module == module }) else { return }
+        let prevSlot = slots[activeIndex]
+        let clampedCol = min(max(0, toCol), Self.totalCols - prevSlot.size.colSpan)
+        let clampedRow = max(0, toRow)
+
+        var candidate = prevSlot
+        candidate.col = clampedCol
+        candidate.row = clampedRow
+        slots[activeIndex] = candidate
+
+        let others = slots.enumerated().filter { $0.offset != activeIndex }
+        let colliding = others.filter { Self.overlaps(candidate, $0.element) }
+
+        if colliding.isEmpty {
+            return
+        }
+
+        // 若恰好仅与 1 张卡片碰撞且该卡片可无冲突放回原位置，则执行可逆互换
+        if colliding.count == 1 {
+            let targetIndex = colliding[0].offset
+            var swappedTarget = colliding[0].element
+            let swappedCol = min(max(0, prevSlot.col), Self.totalCols - swappedTarget.size.colSpan)
+            swappedTarget.col = swappedCol
+            swappedTarget.row = prevSlot.row
+
+            let thirdParties = slots.enumerated()
+                .filter { $0.offset != activeIndex && $0.offset != targetIndex }
+                .map(\.element)
+            if !Self.overlaps(candidate, swappedTarget) &&
+                Self.canPlace(size: swappedTarget.size, atCol: swappedTarget.col, row: swappedTarget.row, against: thirdParties) {
+                slots[targetIndex] = swappedTarget
+                return
+            }
+        }
+
+        // 否则仅将发生碰撞的卡片向下顺移，不扰动无关卡片
+        var settled: [DashboardCardSlot] = [candidate]
+        let remainingIndices = others.map(\.offset).sorted {
+            let a = slots[$0]
+            let b = slots[$1]
+            return a.row != b.row ? a.row < b.row : a.col < b.col
+        }
+
+        for idx in remainingIndices {
+            var item = slots[idx]
+            var guardCount = 0
+            while settled.contains(where: { Self.overlaps(item, $0) }) && guardCount < 200 {
+                item.row += 1
+                guardCount += 1
+            }
+            slots[idx] = item
+            settled.append(item)
+        }
     }
 
     private static func firstAvailablePosition(
         for size: CardSize,
         against existing: [DashboardCardSlot]
-    ) -> (colUnit: Int, rowUnit: Int) {
-        let maxRow = (existing.map { $0.rowUnit + $0.size.rowUnits }.max() ?? 0) + 4
-        let stepCol = size == .miniHalf ? 1 : 2
-        let stepRow = size == .miniHalf ? 1 : 2
-        for row in stride(from: 0, through: maxRow, by: stepRow) {
-            for col in stride(from: 0, through: totalColUnits - size.colUnits, by: stepCol) {
+    ) -> (col: Int, row: Int) {
+        let maxRow = (existing.map { $0.row + $0.size.rowSpan }.max() ?? 0) + 4
+        for row in 0...maxRow {
+            for col in 0...(totalCols - size.colSpan) {
                 if canPlace(size: size, atCol: col, row: row, against: existing) {
                     return (col, row)
                 }
@@ -244,15 +287,15 @@ public struct DashboardLayout: Codable, Sendable, Equatable {
         row: Int,
         against existing: [DashboardCardSlot]
     ) -> Bool {
-        guard col >= 0, row >= 0, col + size.colUnits <= totalColUnits else { return false }
-        for other in existing {
-            let overlapX = col < other.colUnit + other.size.colUnits && col + size.colUnits > other.colUnit
-            let overlapY = row < other.rowUnit + other.size.rowUnits && row + size.rowUnits > other.rowUnit
-            if overlapX && overlapY {
-                return false
-            }
-        }
-        return true
+        guard col >= 0, row >= 0, col + size.colSpan <= totalCols else { return false }
+        let probe = DashboardCardSlot(module: .homeworkTodo, size: size, col: col, row: row)
+        return !existing.contains { overlaps(probe, $0) }
+    }
+
+    public static func overlaps(_ a: DashboardCardSlot, _ b: DashboardCardSlot) -> Bool {
+        let overlapX = a.col < b.col + b.size.colSpan && a.col + a.size.colSpan > b.col
+        let overlapY = a.row < b.row + b.size.rowSpan && a.row + a.size.rowSpan > b.row
+        return overlapX && overlapY
     }
 }
 

@@ -66,14 +66,20 @@ jobs:
             exit 1
           fi
           if [ "${PUBLISH_RELEASE:-false}" = "true" ] && [ -n "${RELEASE_TAG:-}" ]; then
-            if [ "v${VER_NAME}" != "${RELEASE_TAG}" ]; then
-              echo "::error::版本不一致: v${VER_NAME} != ${RELEASE_TAG}"
+            BASE_TAG="${RELEASE_TAG%%-*}"
+            if [ "v${VER_NAME}" != "${BASE_TAG}" ]; then
+              echo "::error::版本不一致: v${VER_NAME} != ${BASE_TAG} (from ${RELEASE_TAG})"
               exit 1
             fi
+          fi
+          IS_DEV_PRERELEASE="false"
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF}" = "refs/heads/main" ] && [ "${PUBLISH_RELEASE:-false}" != "true" ]; then
+            IS_DEV_PRERELEASE="true"
           fi
           echo "version_name=${VER_NAME}" >> "$GITHUB_OUTPUT"
           echo "version_code=${VER_CODE}" >> "$GITHUB_OUTPUT"
           echo "tag=v${VER_NAME}" >> "$GITHUB_OUTPUT"
+          echo "is_dev_prerelease=${IS_DEV_PRERELEASE}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare optional secrets xcconfig
         env:
@@ -119,8 +125,11 @@ jobs:
           fi
           mkdir -p build/payload-std/Payload
           cp -R "$STD_APP" build/payload-std/Payload/
+          find build/payload-std \( -name '.DS_Store' -o -name '._*' \) -delete
+          plutil -convert xml1 build/payload-std/Payload/BuctOne.app/Info.plist
+          codesign --force --sign - --entitlements App/Entitlements/BuctOneStandard.entitlements build/payload-std/Payload/BuctOne.app
+          codesign --verify --strict build/payload-std/Payload/BuctOne.app
           STD_IPA="buct-one-ios-v${VER_NAME}-unsigned.ipa"
-          (cd build/payload-std && zip -qr "../../dist/${STD_IPA}" Payload)
 
           # 2. 完整小组件版
           xcodebuild archive \
@@ -143,8 +152,119 @@ jobs:
           fi
           mkdir -p build/payload-full/Payload
           cp -R "$FULL_APP" build/payload-full/Payload/
+          find build/payload-full \( -name '.DS_Store' -o -name '._*' \) -delete
+          plutil -convert xml1 build/payload-full/Payload/BuctOne.app/Info.plist
+          plutil -convert xml1 build/payload-full/Payload/BuctOne.app/PlugIns/BuctOneWidgets.appex/Info.plist
+          codesign --force --sign - --entitlements WidgetExtension/BuctOneWidgets.entitlements build/payload-full/Payload/BuctOne.app/PlugIns/BuctOneWidgets.appex
+          codesign --force --sign - --entitlements App/Entitlements/BuctOneFull.entitlements build/payload-full/Payload/BuctOne.app
+          codesign --verify --deep --strict build/payload-full/Payload/BuctOne.app
           FULL_IPA="buct-one-ios-v${VER_NAME}-widgets-unsigned.ipa"
-          (cd build/payload-full && zip -qr "../../dist/${FULL_IPA}" Payload)
+
+          # 3. 使用纯 ZIP32 STORE + 零 extra field 打包，并按 SideStore SideSign 逻辑校验
+          python3 - "build/payload-std" "dist/${STD_IPA}" "com.buct.one" "false" \
+                    "build/payload-full" "dist/${FULL_IPA}" "com.buct.one.full" "true" <<'PY'
+          import os, plistlib, stat, struct, sys, time, zipfile, zlib
+
+          def zip_payload(payload_root, out_ipa):
+              with zipfile.ZipFile(out_ipa, "w", compression=zipfile.ZIP_STORED, allowZip64=False) as zf:
+                  for root, dirs, files in os.walk(payload_root):
+                      dirs[:] = sorted(d for d in dirs if d not in ("__MACOSX",) and not d.startswith("._") and d != ".DS_Store")
+                      files = sorted(f for f in files if not f.startswith("._") and f != ".DS_Store")
+                      rel_root = os.path.relpath(root, payload_root)
+                      if rel_root != ".":
+                          rel_dir = rel_root.replace(os.sep, "/") + "/"
+                          st = os.lstat(root)
+                          zi = zipfile.ZipInfo(rel_dir, date_time=time.localtime(st.st_mtime)[:6])
+                          zi.create_system = 3
+                          zi.compress_type = zipfile.ZIP_STORED
+                          zi.flag_bits = 0x0800
+                          zi.external_attr = (stat.S_IFDIR | (st.st_mode & 0o777) or 0o755) << 16
+                          zi.extra = b""
+                          zf.writestr(zi, b"")
+                      for fn in files:
+                          full_path = os.path.join(root, fn)
+                          rel_file = os.path.relpath(full_path, payload_root).replace(os.sep, "/")
+                          st = os.lstat(full_path)
+                          zi = zipfile.ZipInfo(rel_file, date_time=time.localtime(st.st_mtime)[:6])
+                          zi.create_system = 3
+                          zi.compress_type = zipfile.ZIP_STORED
+                          zi.flag_bits = 0x0800
+                          zi.external_attr = (stat.S_IFREG | (st.st_mode & 0o777)) << 16
+                          zi.extra = b""
+                          with open(full_path, "rb") as f:
+                              zf.writestr(zi, f.read())
+
+          def has_lc_code_signature(macho_bytes):
+              magic, _, _, _, ncmds, _, _, _ = struct.unpack_from("<IIIIIIII", macho_bytes, 0)
+              assert magic == 0xfeedfacf, f"unexpected Mach-O magic: {hex(magic)}"
+              off = 32
+              for _ in range(ncmds):
+                  cmd, cmdsize = struct.unpack_from("<II", macho_bytes, off)
+                  if cmd == 0x1d:
+                      return True
+                  off += cmdsize
+              return False
+
+          def verify_sidesign_ipa(ipa_path, expected_bundle_id, expect_widget):
+              data = open(ipa_path, "rb").read()
+              assert len(data) >= 22, f"{ipa_path}: file too small"
+              search_len = min(len(data), 65536 + 22)
+              search_off = len(data) - search_len
+              search = data[search_off:]
+              eocd = None
+              for i in range(len(search) - 22, -1, -1):
+                  if struct.unpack_from("<I", search, i)[0] == 0x06054b50:
+                      eocd = i
+                      break
+              assert eocd is not None, f"{ipa_path}: EOCD not found"
+              total_entries = struct.unpack_from("<H", search, eocd + 10)[0]
+              cd_size = struct.unpack_from("<I", search, eocd + 12)[0]
+              cd_offset = struct.unpack_from("<I", search, eocd + 16)[0]
+              assert cd_offset + cd_size <= len(data), f"{ipa_path}: CD out of bounds"
+              cd = data[cd_offset:cd_offset + cd_size]
+              off = 0
+              for _ in range(total_entries):
+                  magic = struct.unpack_from("<I", cd, off)[0]
+                  assert magic == 0x02014b50
+                  method = struct.unpack_from("<H", cd, off + 10)[0]
+                  crc = struct.unpack_from("<I", cd, off + 16)[0]
+                  comp = struct.unpack_from("<I", cd, off + 20)[0]
+                  uncomp = struct.unpack_from("<I", cd, off + 24)[0]
+                  nlen = struct.unpack_from("<H", cd, off + 28)[0]
+                  elen = struct.unpack_from("<H", cd, off + 30)[0]
+                  clen = struct.unpack_from("<H", cd, off + 32)[0]
+                  loff = struct.unpack_from("<I", cd, off + 42)[0]
+                  name = cd[off + 46:off + 46 + nlen].decode("utf-8")
+                  off += 46 + nlen + elen + clen
+                  assert method == 0, f"{ipa_path}: {name} expected STORE (0), got {method}"
+                  assert elen == 0, f"{ipa_path}: {name} CD extra len {elen} != 0"
+                  lmagic = struct.unpack_from("<I", data, loff)[0]
+                  lnlen = struct.unpack_from("<H", data, loff + 26)[0]
+                  lelen = struct.unpack_from("<H", data, loff + 28)[0]
+                  assert lmagic == 0x04034b50, f"{ipa_path}: {name} bad local header magic"
+                  assert lelen == 0, f"{ipa_path}: {name} local extra len {lelen} != 0"
+                  raw = data[loff + 30 + lnlen + lelen:loff + 30 + lnlen + lelen + comp]
+                  assert len(raw) == uncomp
+                  if uncomp > 0 and crc != 0:
+                      assert (zlib.crc32(raw) & 0xffffffff) == crc, f"{ipa_path}: {name} CRC mismatch"
+              with zipfile.ZipFile(ipa_path, "r") as zf:
+                  assert zf.testzip() is None
+                  plist = plistlib.loads(zf.read("Payload/BuctOne.app/Info.plist"))
+                  assert plist["CFBundleIdentifier"] == expected_bundle_id
+                  assert has_lc_code_signature(zf.read("Payload/BuctOne.app/BuctOne")), "Main Mach-O missing LC_CODE_SIGNATURE"
+                  if expect_widget:
+                      assert has_lc_code_signature(zf.read("Payload/BuctOne.app/PlugIns/BuctOneWidgets.appex/BuctOneWidgets")), "Widget Mach-O missing LC_CODE_SIGNATURE"
+              print(f"Verified SideSign-compatible IPA: {ipa_path} ({len(data)} bytes, {total_entries} entries)")
+
+          args = sys.argv[1:]
+          for i in range(0, len(args), 4):
+              src_dir, out_ipa, bid, exp_w = args[i], args[i + 1], args[i + 2], args[i + 3] == "true"
+              zip_payload(src_dir, out_ipa)
+              verify_sidesign_ipa(out_ipa, bid, exp_w)
+          PY
+
+          unzip -t "dist/${STD_IPA}" >/dev/null
+          unzip -t "dist/${FULL_IPA}" >/dev/null
 
           # 3. SHA-256 与体积门禁
           cd dist
@@ -166,15 +286,22 @@ jobs:
           VER_NAME: ${{ steps.ver.outputs.version_name }}
           VER_CODE: ${{ steps.ver.outputs.version_code }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          IS_DEV_PRERELEASE: ${{ steps.ver.outputs.is_dev_prerelease }}
           REPO_FULL_NAME: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
           python3 - <<'PY'
           import datetime, json, os, re
 
           ver = os.environ["VER_NAME"]
           build_ver = os.environ["VER_CODE"]
-          tag = os.environ.get("RELEASE_TAG") or f"v{ver}"
+          publish_release = os.environ.get("PUBLISH_RELEASE", "false").lower() == "true"
+          is_dev = os.environ.get("IS_DEV_PRERELEASE", "false").lower() == "true"
+          release_tag = os.environ.get("RELEASE_TAG") or ""
+          tag = release_tag if release_tag else ("dev-latest" if is_dev else f"v{ver}")
           repo = os.environ.get("REPO_FULL_NAME", "STAR-10086/buct-one-ios")
+          short_sha = os.environ.get("GITHUB_SHA", "")[:7]
 
           std_name = f"buct-one-ios-v{ver}-unsigned.ipa"
           full_name = f"buct-one-ios-v{ver}-widgets-unsigned.ipa"
@@ -188,13 +315,28 @@ jobs:
               if m and m.group(1).strip():
                   notes = m.group(1).strip()
 
+          release_md = notes
+          if is_dev:
+              release_md += (
+                  f"\n\n---\n"
+                  f"- **滚动预发布构建**：`{short_sha}`（`v{ver}` build `{build_ver}`）\n"
+                  f"- **标准版**（`{std_name}`）：不含小组件扩展，仅占 1 个 App ID，兼容 LiveContainer / 免费自签\n"
+                  f"- **小组件版**（`{full_name}`）：内嵌 WidgetKit 桌面小组件，适合 SideStore / AltStore / 个人证书\n"
+              )
+
           with open("dist/release-notes.md", "w", encoding="utf-8") as f:
-              f.write(notes + "\n")
+              f.write(release_md + "\n")
 
           today_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-          std_url = "https://dl.buct.one/ios/latest/buct-one-ios-latest.ipa"
-          full_url = "https://dl.buct.one/ios/latest/buct-one-ios-widgets-latest.ipa"
-          icon_url = "https://dl.buct.one/ios/icon.png"
+          if publish_release and "-" not in tag:
+              std_url = "https://dl.buct.one/ios/latest/buct-one-ios-latest.ipa"
+              full_url = "https://dl.buct.one/ios/latest/buct-one-ios-widgets-latest.ipa"
+              icon_url = "https://dl.buct.one/ios/icon.png"
+          else:
+              dl_tag = "dev-latest" if is_dev else tag
+              std_url = f"https://github.com/{repo}/releases/download/{dl_tag}/{std_name}"
+              full_url = f"https://github.com/{repo}/releases/download/{dl_tag}/{full_name}"
+              icon_url = f"https://raw.githubusercontent.com/{repo}/main/App/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
 
           source = {
               "name": "BUCT One · 北化一站",
@@ -268,6 +410,38 @@ jobs:
             dist/*.ipa
             dist/*.sha256
             dist/apps.json
+
+      - name: Clean & update dev-latest tag for rolling Pre-release
+        if: steps.ver.outputs.is_dev_prerelease == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f dev-latest "${GITHUB_SHA}"
+          git push -f origin dev-latest
+
+          if gh release view dev-latest >/dev/null 2>&1; then
+            for asset in $(gh release view dev-latest --json assets --jq '.assets[].name'); do
+              gh release delete-asset dev-latest "$asset" --yes || true
+            done
+          fi
+
+      - name: Publish dev-latest Pre-release
+        if: steps.ver.outputs.is_dev_prerelease == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev-latest
+          name: "BUCT One iOS Dev Latest (v${{ steps.ver.outputs.version_name }})"
+          prerelease: true
+          make_latest: false
+          body_path: dist/release-notes.md
+          files: |
+            dist/*.ipa
+            dist/*.sha256
+            dist/apps.json
+          fail_on_unmatched_files: true
 
       - name: Publish GitHub Release
         if: inputs.publish_release == true && inputs.release_tag != ''

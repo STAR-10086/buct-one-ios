@@ -56,9 +56,21 @@ jobs:
           # 2. 分层依赖检查
           check_hit "Packages/BuctCore/Sources/BuctStore" "import (BuctNetwork|BuctSources|BuctSync|SwiftUI|UIKit)" "BuctStore 越层依赖"
           check_hit "Packages/BuctCore/Sources/BuctSources" "import (BuctStore|BuctSync|SwiftUI|UIKit)" "BuctSources 越层依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSources/Academic" "(PortalCalendar|JwNotice|Theol|Mail|Electricity|CampusNet|Ecard|Scs|Sjcx|Tygl|CourseSelection)(Client|Parser)" "BuctSources/Academic 禁止跨子域依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSources/Portal" "(Jwglxt|Gmis|JwNotice|Theol|Mail|Electricity|CampusNet|Ecard|Scs|Sjcx|Tygl|CourseSelection)(Client|Parser)" "BuctSources/Portal 禁止跨子域依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSources/JwNotice" "(Jwglxt|Gmis|PortalCalendar|Theol|Mail|Electricity|CampusNet|Ecard|Scs|Sjcx|Tygl|CourseSelection)(Client|Parser)" "BuctSources/JwNotice 禁止跨子域依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSources/Theol" "(Jwglxt|Gmis|PortalCalendar|JwNotice|Mail|Electricity|CampusNet|Ecard|Scs|Sjcx|Tygl|CourseSelection)(Client|Parser)" "BuctSources/Theol 禁止跨子域依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSources/Mail" "(Jwglxt|Gmis|PortalCalendar|JwNotice|Theol|Electricity|CampusNet|Ecard|Scs|Sjcx|Tygl|CourseSelection)(Client|Parser)" "BuctSources/Mail 禁止跨子域依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSources/Electricity" "(Jwglxt|Gmis|PortalCalendar|JwNotice|Theol|Mail|CampusNet|Ecard|Scs|Sjcx|Tygl|CourseSelection)(Client|Parser)" "BuctSources/Electricity 禁止跨子域依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSources/CampusNet" "(Jwglxt|Gmis|PortalCalendar|JwNotice|Theol|Mail|Electricity|Ecard|Scs|Sjcx|Tygl|CourseSelection)(Client|Parser)" "BuctSources/CampusNet 禁止跨子域依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSources/Card" "(Jwglxt|Gmis|PortalCalendar|JwNotice|Theol|Mail|Electricity|CampusNet|Scs|Sjcx|Tygl|CourseSelection)(Client|Parser)" "BuctSources/Card 禁止跨子域依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSources/Scs" "(Jwglxt|Gmis|PortalCalendar|JwNotice|Theol|Mail|Electricity|CampusNet|Ecard|Sjcx|Tygl|CourseSelection)(Client|Parser)" "BuctSources/Scs 禁止跨子域依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSources/Sjcx" "(Jwglxt|Gmis|PortalCalendar|JwNotice|Theol|Mail|Electricity|CampusNet|Ecard|Scs|Tygl|CourseSelection)(Client|Parser)" "BuctSources/Sjcx 禁止跨子域依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSources/Tygl" "(Jwglxt|Gmis|PortalCalendar|JwNotice|Theol|Mail|Electricity|CampusNet|Ecard|Scs|Sjcx|CourseSelection)(Client|Parser)" "BuctSources/Tygl 禁止跨子域依赖"
+          check_hit "Packages/BuctCore/Sources/BuctSources/CourseSelection" "(Jwglxt|Gmis|PortalCalendar|JwNotice|Theol|Mail|Electricity|CampusNet|Ecard|Scs|Sjcx|Tygl)(Client|Parser)" "BuctSources/CourseSelection 禁止跨子域依赖"
           check_hit "Packages/BuctCore/Sources/BuctSync" "import (SwiftUI|UIKit)" "BuctSync 禁止依赖 UI 框架"
-          check_hit "App" "import BuctSources" "App 禁止直接依赖 BuctSources"
-          check_hit "WidgetExtension" "import BuctSources" "WidgetExtension 禁止直接依赖 BuctSources"
+          check_hit "App" "import (BuctSources|BuctNetwork)" "App 禁止直接依赖 BuctSources 或 BuctNetwork"
+          check_hit "WidgetExtension" "import (BuctSources|BuctNetwork)" "WidgetExtension 禁止直接依赖 BuctSources 或 BuctNetwork"
 
           # 3. 安全与自签红线
           trust_hits=$(grep -rnE 'URLCredential\s*\(\s*trust:' Packages App WidgetExtension 2>/dev/null | grep -v 'BuctTlsDelegate.swift' || true)
@@ -69,8 +81,12 @@ jobs:
           fi
 
           check_hit "project.yml" "NSAllowsArbitraryLoads" "禁止开启全局 NSAllowsArbitraryLoads"
-          check_hit "Packages" "kSecAttrAccessGroup" "禁止显式设置 kSecAttrAccessGroup（破坏免费签与 LiveContainer）"
-          check_hit "App" "kSecAttrAccessGroup" "禁止显式设置 kSecAttrAccessGroup"
+          ksec_hits=$(grep -rnE 'kSecAttrAccessGroup' Packages App 2>/dev/null | grep -vE ':[0-9]+:\s*//' || true)
+          if [ -n "$ksec_hits" ]; then
+            echo "::error::禁止显式设置 kSecAttrAccessGroup（破坏免费签与 LiveContainer）:"
+            echo "$ksec_hits"
+            v=1
+          fi
           check_hit "App/Entitlements" "aps-environment|com\.apple\.developer\.icloud|associated-domains" "禁止声明免费自签不支持的受限 Entitlements"
           check_hit "WidgetExtension" "aps-environment|com\.apple\.developer\.icloud|associated-domains" "禁止声明免费自签不支持的受限 Entitlements"
 

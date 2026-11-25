@@ -192,15 +192,25 @@ public enum BuctCrypto {
     // MARK: - RSA/ECB/PKCS1Padding
 
     public static func rsaEncryptPKCS1(plaintext: Data, spkiBase64: String) throws -> Data {
-        let cleaned = spkiBase64
+        var cleaned = spkiBase64
             .replacingOccurrences(of: "-----BEGIN PUBLIC KEY-----", with: "")
             .replacingOccurrences(of: "-----END PUBLIC KEY-----", with: "")
+            .replacingOccurrences(of: "\\/", with: "/")
+            .replacingOccurrences(of: "\\n", with: "")
+            .replacingOccurrences(of: "\\r", with: "")
             .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
-        guard let der = Data(base64Encoded: cleaned), !der.isEmpty else {
+        let rem = cleaned.count % 4
+        if rem != 0 {
+            cleaned += String(repeating: "=", count: 4 - rem)
+        }
+        guard let der = Data(base64Encoded: cleaned, options: [.ignoreUnknownCharacters]), !der.isEmpty else {
             throw BuctCryptoError.rsaKeyInvalid
         }
-        let pkcs1Data = extractPKCS1FromSPKI(der) ?? der
-        return try rsaEncryptWithPKCS1Data(plaintext: plaintext, pkcs1Data: pkcs1Data)
+        if let pkcs1Data = extractPKCS1FromSPKI(der),
+           let encrypted = try? rsaEncryptWithPKCS1Data(plaintext: plaintext, pkcs1Data: Data(pkcs1Data)) {
+            return encrypted
+        }
+        return try rsaEncryptWithPKCS1Data(plaintext: plaintext, pkcs1Data: der)
     }
 
     public static func rsaEncryptPKCS1(plaintext: Data, modulus: Data, exponent: Data) throws -> Data {
@@ -237,10 +247,15 @@ public enum BuctCrypto {
         return encrypted
     }
 
-    // MARK: - SHA-256 / HMAC-SHA256 / AES-GCM
+    // MARK: - SHA-256 / MD5 / HMAC-SHA256 / AES-GCM
 
     public static func sha256Hex(_ input: String) -> String {
         let digest = SHA256.hash(data: Data(input.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    public static func md5Hex(_ input: String) -> String {
+        let digest = Insecure.MD5.hash(data: Data(input.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 

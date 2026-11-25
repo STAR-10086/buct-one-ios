@@ -37,11 +37,11 @@ struct RootTabView: View {
         GeometryReader { proxy in
             TabView(selection: $env.selectedTab) {
                 Tab("课表", systemImage: "calendar", value: AppTab.schedule) {
-                    SchedulePlaceholderView()
+                    ScheduleView()
                 }
 
                 Tab("成绩", systemImage: "chart.line.uptrend.xyaxis", value: AppTab.grades) {
-                    GradesPlaceholderView()
+                    GradesView()
                 }
 
                 Tab("工作台", systemImage: "square.grid.2x2.fill", value: AppTab.workbench) {
@@ -49,7 +49,7 @@ struct RootTabView: View {
                 }
 
                 Tab("作业", systemImage: "checklist", value: AppTab.homework) {
-                    HomeworkPlaceholderView()
+                    HomeworkView()
                 }
 
                 Tab("我的", systemImage: "person.crop.circle", value: AppTab.settings) {
@@ -57,6 +57,10 @@ struct RootTabView: View {
                 }
             }
             .tabBarMinimizeBehavior(.onScrollDown)
+            .sheet(isPresented: $env.showLoginSheet) {
+                LoginView()
+                    .environment(environment)
+            }
             .onAppear {
                 let width = Int(proxy.size.width)
                 let height = Int(proxy.size.height)

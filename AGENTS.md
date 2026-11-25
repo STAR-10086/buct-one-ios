@@ -6,7 +6,9 @@
 - 查看构建状态：`gh run list -R STAR-10086/buct-one-ios --limit 5` / `gh run view <id> --log-failed -R STAR-10086/buct-one-ios`。
 - 本机执行 `git push` 与 `gh` 命令需挂载代理：`$env:HTTPS_PROXY="http://127.0.0.1:7897"; $env:HTTP_PROXY="http://127.0.0.1:7897"`。
 - `.xcodeproj` 由 `XcodeGen`（`project.yml`）在 CI 中现场生成，**禁止提交 `.xcodeproj` / `.xcworkspace`**。
-- 系统基线锁定 **`iOS 26.0+`**、**Swift 6.0**，UI 全部使用 iOS 26 原生 Liquid Glass API（`.glassEffect`、`GlassEffectContainer`、`.tabBarMinimizeBehavior`）。
+- 系统基线锁定 **`iOS 26.0+`**、**Swift 6.0**（`SWIFT_STRICT_CONCURRENCY: complete`），UI 全部使用 iOS 26 原生 Liquid Glass API。
+- 工作台与长列表卡片禁止用外层 `GlassEffectContainer` 包裹（避免 iOS 26 邻近玻璃粘连），多条目列表必须使用 `LazyVStack`。
+- `build-ipa.yml` 必须先 `plutil -convert xml1`、由内而外 `codesign --force --sign -` 注入 ad-hoc 签名与 entitlements，再以零 extra-field 纯 ZIP32 `ZIP_STORED` 打包并通过 `SideSign` 解析校验。
 
 ## 编译器级分层铁律
 
@@ -16,9 +18,9 @@
 BuctModel   → 零第三方依赖，仅 import Foundation
 BuctStore   → 仅依赖 BuctModel（禁止 import BuctNetwork / BuctSources / BuctSync / SwiftUI / UIKit）
 BuctNetwork → 仅依赖 BuctModel + Apple 系统安全/网络框架
-BuctSources → 依赖 BuctModel + BuctNetwork + SwiftSoup（各域子目录互不依赖；禁止 import BuctStore / BuctSync / SwiftUI / UIKit）
+BuctSources → 依赖 BuctModel + BuctNetwork + SwiftSoup（Academic/Portal/JwNotice/Theol 等子域互不依赖；禁止 import BuctStore / BuctSync / SwiftUI / UIKit）
 BuctSync    → 依赖 BuctModel + BuctNetwork + BuctStore + BuctSources（禁止 import SwiftUI / UIKit）
-App / WidgetExtension → 仅允许依赖 BuctModel / BuctStore / BuctSync，禁止 import BuctSources
+App / WidgetExtension → 仅允许依赖 BuctModel / BuctStore / BuctSync，禁止 import BuctSources / BuctNetwork
 ```
 
 ## 数据层四条铁律
