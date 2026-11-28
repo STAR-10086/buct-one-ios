@@ -69,11 +69,10 @@ public struct ImportedExamDraft: Sendable, Equatable, Identifiable {
         ExamItem(
             id: "import-exam-\(UUID().uuidString)",
             courseName: courseName.isEmpty ? examName : courseName,
-            examName: examName,
             examTime: examTime,
             location: location,
             seatNumber: note,
-            campus: "",
+            examName: examName,
             isCustom: true
         )
     }
