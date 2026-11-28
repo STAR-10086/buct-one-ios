@@ -6,6 +6,10 @@ final class M3ParsersTests: XCTestCase {
     func testEcardParserAndCategoryClassification() throws {
         let html = #"window.sessionStorage.setItem('rasPublicKey', 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A\/TEST\/KEY==');"#
         XCTAssertEqual(EcardParser.extractRsaPublicKey(fromIndexHtml: html), "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A/TEST/KEY==")
+        XCTAssertEqual(
+            EcardClient.extractWebportalCookie(from: ["webportal=abc123; Path=/; HttpOnly", "other=1"]),
+            "abc123"
+        )
 
         let emptyJson = #"{"success":false,"message":"WEB20006"}"#
         let empty = try EcardParser.parseTransactions(jsonString: emptyJson)

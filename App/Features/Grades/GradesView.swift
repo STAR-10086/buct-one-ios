@@ -80,6 +80,10 @@ struct GradesView: View {
                             .padding(.horizontal, 16)
                             .padding(.bottom, 20)
                         }
+                        .refreshable {
+                            await environment.refreshGrades(userInitiated: true)
+                            await environment.refreshExams(userInitiated: true)
+                        }
                     }
                 }
                 .padding(.top, 8)
@@ -87,6 +91,10 @@ struct GradesView: View {
             .navigationTitle("学业")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("学业")
+                        .font(.headline)
+                }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if environment.currentProfile != nil {
                         if subTab == .exams {

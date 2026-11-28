@@ -33,6 +33,13 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("我的")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("我的")
+                        .font(.headline)
+                }
+            }
             .sheet(isPresented: $showPasskeySheet) {
                 PasskeyRegisterSheet(hasPasskey: $hasPasskey)
             }

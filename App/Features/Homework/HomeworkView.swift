@@ -74,6 +74,10 @@ struct HomeworkView: View {
             .navigationTitle("作业待办")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("作业待办")
+                        .font(.headline)
+                }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if environment.currentProfile != nil {
                         Button {

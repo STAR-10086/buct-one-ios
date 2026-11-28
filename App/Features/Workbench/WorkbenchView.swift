@@ -70,7 +70,12 @@ struct WorkbenchView: View {
                 }
             }
             .navigationTitle("北化一站")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("北化一站")
+                        .font(.headline)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     if !isEditing {
                         Button("自定义") {

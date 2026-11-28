@@ -47,17 +47,25 @@ struct ScheduleView: View {
             .navigationTitle("课表")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("课表")
+                        .font(.headline)
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    if environment.currentProfile != nil {
+                        Button {
+                            showCalendarSettings = true
+                        } label: {
+                            Image(systemName: "calendar.badge.clock")
+                        }
+                    }
+                }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     if environment.currentProfile != nil {
                         Button {
                             showAddCourseSheet = true
                         } label: {
                             Image(systemName: "plus")
-                        }
-                        Button {
-                            showCalendarSettings = true
-                        } label: {
-                            Image(systemName: "calendar.badge.clock")
                         }
                         Button {
                             Task { await environment.refreshSchedule(userInitiated: true) }
@@ -97,12 +105,23 @@ struct ScheduleView: View {
             } label: {
                 Label(environment.selectedTerm.shortLabel, systemImage: "chevron.down")
                     .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
             }
             .buttonStyle(.glass)
 
             Menu {
+                if let current = environment.currentTeachingWeek, current != environment.selectedWeek {
+                    Button("回到本周（第 \(current) 周）") {
+                        withAnimation(.snappy) {
+                            environment.selectedWeek = current
+                        }
+                    }
+                    Divider()
+                }
                 ForEach(1...ScheduleWeeks.maxWeek, id: \.self) { week in
                     Button {
                         withAnimation(.snappy) {
@@ -117,12 +136,14 @@ struct ScheduleView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
-                    Text("第 \(environment.selectedWeek) 周")
+                HStack(spacing: 5) {
+                    Text("第\(environment.selectedWeek)周")
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     if environment.currentTeachingWeek == environment.selectedWeek {
-                        Text("本周")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(Color.accentColor)
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 6, height: 6)
                     }
                 }
                 .font(.caption.weight(.semibold))
@@ -131,15 +152,16 @@ struct ScheduleView: View {
             }
             .buttonStyle(.glass)
 
-            Spacer()
+            Spacer(minLength: 4)
 
             Picker("视图", selection: $isDayView) {
                 Text("周").tag(false)
                 Text("日").tag(true)
             }
             .pickerStyle(.segmented)
-            .frame(width: 88)
+            .frame(width: 84)
         }
+        .frame(height: 36)
     }
 
     private var weekScheduleGrid: some View {
@@ -290,6 +312,9 @@ struct ScheduleView: View {
                     }
                 }
                 .frame(height: rowHeight * CGFloat(BuctTimeSlots.periods.count) + 16)
+            }
+            .refreshable {
+                await environment.refreshSchedule(userInitiated: true)
             }
         }
     }
