@@ -180,7 +180,7 @@ struct ScheduleView: View {
     }
 
     private func weekPageGrid(for week: Int) -> some View {
-        let rowHeight: CGFloat = 68
+        let rowHeight: CGFloat = 74
         let railW: CGFloat = 34
         let gap: CGFloat = 3
         let dayLabels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -291,8 +291,9 @@ struct ScheduleView: View {
                                             Text(course.location)
                                                 .font(.system(size: 8.5))
                                                 .foregroundStyle(.secondary)
-                                                .lineLimit(span >= 3 ? 3 : 2)
+                                                .lineLimit(nil)
                                                 .multilineTextAlignment(.leading)
+                                                .fixedSize(horizontal: false, vertical: true)
                                         }
                                         Spacer(minLength: 0)
                                     }
@@ -300,6 +301,7 @@ struct ScheduleView: View {
                                     .padding(.vertical, 3)
                                 }
                                 .frame(width: colW, height: h, alignment: .topLeading)
+                                .clipped()
                                 .background(tint.opacity(0.18), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -534,6 +536,7 @@ private struct ScheduleCalendarSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var manualDate: Date = Date()
+    @State private var exportedICalURL: URL?
 
     var body: some View {
         NavigationStack {
@@ -559,7 +562,22 @@ private struct ScheduleCalendarSettingsSheet: View {
                 Section("手动调整开学日期") {
                     DatePicker("选择开学周任意一天", selection: $manualDate, displayedComponents: .date)
                     Button("应用手动开学日期") {
-                        Task { await environment.setManualSemesterStart(manualDate) }
+                        Task {
+                            await environment.setManualSemesterStart(manualDate)
+                            prepareICalFile()
+                        }
+                    }
+                }
+
+                Section("导出到系统日历") {
+                    if let url = exportedICalURL, !environment.allScheduleCourses.isEmpty {
+                        ShareLink(item: url) {
+                            Label("导出本学期课表 (.ics)", systemImage: "calendar.badge.plus")
+                        }
+                    } else {
+                        Text("当前学期暂无可导出的课程")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -603,7 +621,25 @@ private struct ScheduleCalendarSettingsSheet: View {
                 if let parsed = ScheduleDates.parseUTCDate(environment.firstWeekMonday) {
                     manualDate = parsed
                 }
+                prepareICalFile()
             }
         }
+    }
+
+    private func prepareICalFile() {
+        guard !environment.allScheduleCourses.isEmpty else {
+            exportedICalURL = nil
+            return
+        }
+        let ics = ICalExporter.exportSchedule(
+            courses: environment.allScheduleCourses,
+            term: environment.selectedTerm,
+            firstWeekMonday: environment.firstWeekMonday
+        )
+        guard !ics.isEmpty else { return }
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("buct-schedule-\(environment.selectedTerm.id).ics")
+        try? ics.write(to: fileURL, atomically: true, encoding: .utf8)
+        exportedICalURL = fileURL
     }
 }

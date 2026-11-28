@@ -6,16 +6,15 @@
 
 ---
 
-## 双包分发说明
+## 自签分发说明
 
-为兼顾不同自签工具的权限限制，CI 每次构建均同时产出两个无签名 `.ipa`：
+因免费自签与常见侧载环境无法稳定运行 WidgetKit 扩展，CI 仅构建单一无扩展无签名 `.ipa`：
 
 | 发行包 | Bundle ID | 适用工具 | 特点 |
 | :--- | :--- | :--- | :--- |
-| **标准版 (`buct-one-ios-*-unsigned.ipa`)** | `com.buct.one` | **LiveContainer / 免费 Apple ID（推荐）** / SideStore / AltStore / Sideloadly / Feather | 不含 `.appex` 扩展与 App Group 权限，仅占 1 个 App ID，兼容所有自签环境（~6.5 MB） |
-| **小组件版 (`buct-one-ios-*-widgets-unsigned.ipa`)** | `com.buct.one.full` | **SideStore / AltStore / 个人付费证书（Feather/ESign）** | 内嵌 `BuctOneWidgets.appex` 桌面小组件，动态探测 App Group 容器并自动兜底沙盒（~7.0 MB） |
+| **标准版 (`buct-one-ios-*-unsigned.ipa`)** | `com.buct.one` | **SideStore / AltStore / LiveContainer / Sideloadly / Feather / ESign** | 不含 `.appex` 扩展与 App Group 权限，仅占 1 个 App ID，兼容所有自签环境（~6.5 MB） |
 
-> 💡 所有 `.ipa` 在 CI 中均经过 `codesign --force --sign -` ad-hoc 预签（保留 `LC_CODE_SIGNATURE` 与 Entitlements）、XML `Info.plist` 规范化及零 extra-field 纯 `ZIP_STORED` 打包，并通过 `SideSign` 格式校验。详细自签排障请见 [自签与安装指南](docs/自签与安装指南.md)。
+> 💡 IPA 在 CI 中均经过 `codesign --force --sign -` ad-hoc 预签（保留 `LC_CODE_SIGNATURE` 与 Entitlements）、XML `Info.plist` 规范化及零 extra-field 纯 `ZIP_STORED` 打包，并通过 `SideSign` 格式校验。R2（`update.buct.one/ios/apps.json`）仅托管下载源清单，IPA 包体统一由 GitHub Releases 分发。详细自签排障请见 [自签与安装指南](docs/自签与安装指南.md)。
 
 ### SideStore / AltStore 源地址
 

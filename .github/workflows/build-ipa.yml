@@ -96,15 +96,14 @@ jobs:
           fi
           xcodegen generate --spec project.yml
 
-      - name: Archive & package unsigned IPAs
+      - name: Archive & package unsigned IPA
         env:
           VER_NAME: ${{ steps.ver.outputs.version_name }}
         run: |
           set -euo pipefail
           rm -rf build dist
-          mkdir -p build/standard build/widgets dist
+          mkdir -p build/standard dist
 
-          # 1. 标准无扩展版
           xcodebuild archive \
             -project BuctOne.xcodeproj \
             -scheme BuctOne \
@@ -120,7 +119,7 @@ jobs:
 
           STD_APP="build/standard/BuctOne.xcarchive/Products/Applications/BuctOne.app"
           if [ -d "${STD_APP}/PlugIns" ]; then
-            echo "::error::标准版 IPA 不得包含 PlugIns 扩展"
+            echo "::error::IPA 不得包含 PlugIns 扩展"
             exit 1
           fi
           mkdir -p build/payload-std/Payload
@@ -131,38 +130,8 @@ jobs:
           codesign --verify --strict build/payload-std/Payload/BuctOne.app
           STD_IPA="buct-one-ios-v${VER_NAME}-unsigned.ipa"
 
-          # 2. 完整小组件版
-          xcodebuild archive \
-            -project BuctOne.xcodeproj \
-            -scheme BuctOneFull \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -archivePath build/widgets/BuctOne.xcarchive \
-            -derivedDataPath build/dd-widgets \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=NO
-
-          FULL_APP="build/widgets/BuctOne.xcarchive/Products/Applications/BuctOne.app"
-          if [ ! -d "${FULL_APP}/PlugIns/BuctOneWidgets.appex" ]; then
-            echo "::error::完整小组件版缺少 PlugIns/BuctOneWidgets.appex"
-            exit 1
-          fi
-          mkdir -p build/payload-full/Payload
-          cp -R "$FULL_APP" build/payload-full/Payload/
-          find build/payload-full \( -name '.DS_Store' -o -name '._*' \) -delete
-          plutil -convert xml1 build/payload-full/Payload/BuctOne.app/Info.plist
-          plutil -convert xml1 build/payload-full/Payload/BuctOne.app/PlugIns/BuctOneWidgets.appex/Info.plist
-          codesign --force --sign - --entitlements WidgetExtension/BuctOneWidgets.entitlements build/payload-full/Payload/BuctOne.app/PlugIns/BuctOneWidgets.appex
-          codesign --force --sign - --entitlements App/Entitlements/BuctOneFull.entitlements build/payload-full/Payload/BuctOne.app
-          codesign --verify --deep --strict build/payload-full/Payload/BuctOne.app
-          FULL_IPA="buct-one-ios-v${VER_NAME}-widgets-unsigned.ipa"
-
-          # 3. 使用纯 ZIP32 STORE + 零 extra field 打包，并按 SideStore SideSign 逻辑校验
-          python3 - "build/payload-std" "dist/${STD_IPA}" "com.buct.one" "false" \
-                    "build/payload-full" "dist/${FULL_IPA}" "com.buct.one.full" "true" <<'PY'
+          # 使用纯 ZIP32 STORE + 零 extra field 打包，并按 SideStore SideSign 逻辑校验
+          python3 - "build/payload-std" "dist/${STD_IPA}" "com.buct.one" <<'PY'
           import os, plistlib, stat, struct, sys, time, zipfile, zlib
 
           def zip_payload(payload_root, out_ipa):
@@ -205,7 +174,7 @@ jobs:
                   off += cmdsize
               return False
 
-          def verify_sidesign_ipa(ipa_path, expected_bundle_id, expect_widget):
+          def verify_sidesign_ipa(ipa_path, expected_bundle_id):
               data = open(ipa_path, "rb").read()
               assert len(data) >= 22, f"{ipa_path}: file too small"
               search_len = min(len(data), 65536 + 22)
@@ -252,19 +221,14 @@ jobs:
                   plist = plistlib.loads(zf.read("Payload/BuctOne.app/Info.plist"))
                   assert plist["CFBundleIdentifier"] == expected_bundle_id
                   assert has_lc_code_signature(zf.read("Payload/BuctOne.app/BuctOne")), "Main Mach-O missing LC_CODE_SIGNATURE"
-                  if expect_widget:
-                      assert has_lc_code_signature(zf.read("Payload/BuctOne.app/PlugIns/BuctOneWidgets.appex/BuctOneWidgets")), "Widget Mach-O missing LC_CODE_SIGNATURE"
               print(f"Verified SideSign-compatible IPA: {ipa_path} ({len(data)} bytes, {total_entries} entries)")
 
-          args = sys.argv[1:]
-          for i in range(0, len(args), 4):
-              src_dir, out_ipa, bid, exp_w = args[i], args[i + 1], args[i + 2], args[i + 3] == "true"
-              zip_payload(src_dir, out_ipa)
-              verify_sidesign_ipa(out_ipa, bid, exp_w)
+          src_dir, out_ipa, bid = sys.argv[1], sys.argv[2], sys.argv[3]
+          zip_payload(src_dir, out_ipa)
+          verify_sidesign_ipa(out_ipa, bid)
           PY
 
           unzip -t "dist/${STD_IPA}" >/dev/null
-          unzip -t "dist/${FULL_IPA}" >/dev/null
 
           # 3. SHA-256 与体积门禁
           cd dist
@@ -304,9 +268,7 @@ jobs:
           short_sha = os.environ.get("GITHUB_SHA", "")[:7]
 
           std_name = f"buct-one-ios-v{ver}-unsigned.ipa"
-          full_name = f"buct-one-ios-v{ver}-widgets-unsigned.ipa"
           std_size = os.path.getsize(f"dist/{std_name}")
-          full_size = os.path.getsize(f"dist/{full_name}")
 
           notes = f"BUCT One iOS {tag}"
           if os.path.exists("CHANGELOG.md"):
@@ -320,22 +282,18 @@ jobs:
               release_md += (
                   f"\n\n---\n"
                   f"- **滚动预发布构建**：`{short_sha}`（`v{ver}` build `{build_ver}`）\n"
-                  f"- **标准版**（`{std_name}`）：不含小组件扩展，仅占 1 个 App ID，兼容 LiveContainer / 免费自签\n"
-                  f"- **小组件版**（`{full_name}`）：内嵌 WidgetKit 桌面小组件，适合 SideStore / AltStore / 个人证书\n"
+                  f"- **安装包**（`{std_name}`）：不含小组件扩展，仅占 1 个 App ID，兼容 SideStore / AltStore / LiveContainer 与免费 Apple ID 自签\n"
               )
 
           with open("dist/release-notes.md", "w", encoding="utf-8") as f:
               f.write(release_md + "\n")
 
           today_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          dl_tag = "dev-latest" if is_dev else tag
+          std_url = f"https://github.com/{repo}/releases/download/{dl_tag}/{std_name}"
           if publish_release and "-" not in tag:
-              std_url = "https://dl.buct.one/ios/latest/buct-one-ios-latest.ipa"
-              full_url = "https://dl.buct.one/ios/latest/buct-one-ios-widgets-latest.ipa"
-              icon_url = "https://dl.buct.one/ios/icon.png"
+              icon_url = "https://update.buct.one/ios/icon.png"
           else:
-              dl_tag = "dev-latest" if is_dev else tag
-              std_url = f"https://github.com/{repo}/releases/download/{dl_tag}/{std_name}"
-              full_url = f"https://github.com/{repo}/releases/download/{dl_tag}/{full_name}"
               icon_url = f"https://raw.githubusercontent.com/{repo}/main/App/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
 
           source = {
@@ -344,11 +302,11 @@ jobs:
               "sourceURL": "https://update.buct.one/ios/apps.json",
               "apps": [
                   {
-                      "name": "北化一站 (标准版)",
+                      "name": "北化一站",
                       "bundleIdentifier": "com.buct.one",
                       "developerName": "STAR-10086",
-                      "subtitle": "兼容 LiveContainer / 免费自签 (无小组件扩展)",
-                      "localizedDescription": "面向北京化工大学师生的 iOS 26 原生液态玻璃校园工作台。标准版不含桌面小组件扩展，仅占 1 个 App ID，100% 兼容 LiveContainer 与免费 Apple ID 自签。",
+                      "subtitle": "北京化工大学校园工作台 · iOS 26 原生液态玻璃",
+                      "localizedDescription": "面向北京化工大学师生的 iOS 26 原生液态玻璃校园工作台。无小组件扩展，仅占 1 个 App ID，兼容 SideStore / AltStore / LiveContainer 与免费 Apple ID 自签。",
                       "iconURL": icon_url,
                       "tintColor": "0A84FF",
                       "downloadURL": std_url,
@@ -364,31 +322,6 @@ jobs:
                               "localizedDescription": notes,
                               "downloadURL": std_url,
                               "size": std_size,
-                              "minOSVersion": "26.0"
-                          }
-                      ]
-                  },
-                  {
-                      "name": "北化一站 (小组件版)",
-                      "bundleIdentifier": "com.buct.one.full",
-                      "developerName": "STAR-10086",
-                      "subtitle": "含 WidgetKit 桌面小组件 (SideStore / 证书推荐)",
-                      "localizedDescription": "面向北京化工大学师生的 iOS 26 原生液态玻璃校园工作台。内嵌 WidgetKit 桌面小组件扩展，支持 SideStore / AltStore 与个人证书自签。",
-                      "iconURL": icon_url,
-                      "tintColor": "0A84FF",
-                      "downloadURL": full_url,
-                      "size": full_size,
-                      "version": ver,
-                      "versionDate": today_iso,
-                      "versionDescription": notes,
-                      "versions": [
-                          {
-                              "version": ver,
-                              "buildVersion": build_ver,
-                              "date": today_iso,
-                              "localizedDescription": notes,
-                              "downloadURL": full_url,
-                              "size": full_size,
                               "minOSVersion": "26.0"
                           }
                       ]
@@ -457,13 +390,12 @@ jobs:
             dist/apps.json
           fail_on_unmatched_files: true
 
-      - name: Upload release assets to Cloudflare R2
+      - name: Upload SideStore source manifest to Cloudflare R2
         if: inputs.publish_release == true && inputs.release_tag != '' && !contains(inputs.release_tag, '-')
         env:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          VER_NAME: ${{ steps.ver.outputs.version_name }}
         run: |
           set -euo pipefail
           if [ -z "${R2_ENDPOINT:-}" ] || [ -z "${R2_ACCESS_KEY_ID:-}" ] || [ -z "${R2_SECRET_ACCESS_KEY:-}" ]; then
@@ -480,10 +412,6 @@ jobs:
           CLEAN_ENDPOINT="${CLEAN_ENDPOINT%/${BUCKET}}"
           CACHE="public, max-age=60, stale-while-revalidate=300"
 
-          aws s3 cp "dist/buct-one-ios-v${VER_NAME}-unsigned.ipa" "s3://${BUCKET}/ios/latest/buct-one-ios-latest.ipa" \
-            --endpoint-url "${CLEAN_ENDPOINT}" --no-progress --content-type "application/octet-stream" --cache-control "${CACHE}"
-          aws s3 cp "dist/buct-one-ios-v${VER_NAME}-widgets-unsigned.ipa" "s3://${BUCKET}/ios/latest/buct-one-ios-widgets-latest.ipa" \
-            --endpoint-url "${CLEAN_ENDPOINT}" --no-progress --content-type "application/octet-stream" --cache-control "${CACHE}"
           aws s3 cp "dist/apps.json" "s3://${BUCKET}/ios/apps.json" \
             --endpoint-url "${CLEAN_ENDPOINT}" --no-progress --content-type "application/json; charset=utf-8" --cache-control "${CACHE}"
           aws s3 cp "App/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png" "s3://${BUCKET}/ios/icon.png" \

@@ -330,10 +330,43 @@ public struct LocalTodoItem: Codable, Sendable, Equatable, Identifiable {
 public struct TheolFilterPrefs: Codable, Sendable, Equatable {
     public var hiddenHomeworkIds: Set<String>
     public var hiddenTestKeys: Set<String>
+    public var hiddenCourseNames: Set<String>
+    public var hiddenExperimentIds: Set<String>
 
-    public init(hiddenHomeworkIds: Set<String> = [], hiddenTestKeys: Set<String> = []) {
+    public init(
+        hiddenHomeworkIds: Set<String> = [],
+        hiddenTestKeys: Set<String> = [],
+        hiddenCourseNames: Set<String> = [],
+        hiddenExperimentIds: Set<String> = []
+    ) {
         self.hiddenHomeworkIds = hiddenHomeworkIds
         self.hiddenTestKeys = hiddenTestKeys
+        self.hiddenCourseNames = hiddenCourseNames
+        self.hiddenExperimentIds = hiddenExperimentIds
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hiddenHomeworkIds
+        case hiddenTestKeys
+        case hiddenCourseNames
+        case hiddenExperimentIds
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.hiddenHomeworkIds = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenHomeworkIds) ?? []
+        self.hiddenTestKeys = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenTestKeys) ?? []
+        self.hiddenCourseNames = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenCourseNames) ?? []
+        self.hiddenExperimentIds = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenExperimentIds) ?? []
+    }
+
+    public var totalHiddenCount: Int {
+        hiddenCourseNames.count + hiddenHomeworkIds.count + hiddenTestKeys.count + hiddenExperimentIds.count
+    }
+
+    public func isCourseHidden(_ courseName: String) -> Bool {
+        let key = courseName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !key.isEmpty && hiddenCourseNames.contains(key)
     }
 }
 

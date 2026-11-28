@@ -5,6 +5,7 @@ private enum HomeworkFilterTab: String, CaseIterable {
     case pending = "待办"
     case homeworks = "作业"
     case tests = "测验"
+    case experiments = "实验"
     case local = "本地"
 }
 
@@ -14,7 +15,14 @@ struct HomeworkView: View {
     @State private var selectedHomework: TheolHomeworkItem?
     @State private var selectedTest: TheolTestItem?
     @State private var showAddTodo = false
+    @State private var showImportSheet = false
+    @State private var showFilterSheet = false
+    @State private var showPracticeCenter = false
     @State private var didAutoSync = false
+
+    private var isRefreshing: Bool {
+        environment.isSyncingTheol || environment.isSyncingSjcx
+    }
 
     var body: some View {
         NavigationStack {
@@ -34,7 +42,7 @@ struct HomeworkView: View {
                         Spacer()
                         VStack(spacing: 10) {
                             Text("未登录统一身份认证").font(.headline)
-                            Text("登录后自动同步北化在线（THEOL）待交作业、测验 DDL 与课件资料")
+                            Text("登录后自动同步北化在线（THEOL）待交作业、测验 DDL 与实践教学实验报告")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
@@ -57,6 +65,8 @@ struct HomeworkView: View {
                                     homeworksContent
                                 case .tests:
                                     testsContent
+                                case .experiments:
+                                    experimentsContent
                                 case .local:
                                     localContent
                                 }
@@ -65,7 +75,7 @@ struct HomeworkView: View {
                             .padding(.bottom, 20)
                         }
                         .refreshable {
-                            await environment.refreshTheol(userInitiated: true)
+                            await refreshHomeworkSources(userInitiated: true)
                         }
                     }
                 }
@@ -78,17 +88,39 @@ struct HomeworkView: View {
                     Text("作业待办")
                         .font(.headline)
                 }
-                ToolbarItemGroup(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
                     if environment.currentProfile != nil {
                         Button {
-                            showAddTodo = true
+                            showFilterSheet = true
+                        } label: {
+                            Image(
+                                systemName: environment.theolFilterPrefs.totalHiddenCount > 0
+                                    ? "line.3.horizontal.decrease.circle.fill"
+                                    : "line.3.horizontal.decrease.circle"
+                            )
+                        }
+                    }
+                }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    if environment.currentProfile != nil {
+                        Menu {
+                            Button {
+                                showAddTodo = true
+                            } label: {
+                                Label("添加本地待办", systemImage: "plus.circle")
+                            }
+                            Button {
+                                showImportSheet = true
+                            } label: {
+                                Label("从 CSV / 表格批量导入", systemImage: "tablecells.badge.ellipsis")
+                            }
                         } label: {
                             Image(systemName: "plus")
                         }
                         Button {
-                            Task { await environment.refreshTheol(userInitiated: true) }
+                            Task { await refreshHomeworkSources(userInitiated: true) }
                         } label: {
-                            if environment.isSyncingTheol {
+                            if isRefreshing {
                                 ProgressView().controlSize(.small)
                             } else {
                                 Image(systemName: "arrow.clockwise")
@@ -96,6 +128,9 @@ struct HomeworkView: View {
                         }
                     }
                 }
+            }
+            .navigationDestination(isPresented: $showPracticeCenter) {
+                PracticeTeachingView()
             }
             .sheet(item: $selectedHomework) { item in
                 HomeworkDetailSheet(item: item)
@@ -106,41 +141,74 @@ struct HomeworkView: View {
             .sheet(isPresented: $showAddTodo) {
                 AddLocalTodoSheet()
             }
+            .sheet(isPresented: $showImportSheet) {
+                TaskImportSheet()
+            }
+            .sheet(isPresented: $showFilterSheet) {
+                HomeworkFilterManageSheet()
+            }
             .onAppear {
                 environment.trackVisit(path: "/tab/homework", title: "作业")
                 if !didAutoSync,
                    let profile = environment.currentProfile,
                    profile.systemType == .undergradJwglxt,
-                   !profile.isDemoMode,
-                   environment.theolSlice.provenance.refreshState == .never {
+                   !profile.isDemoMode {
                     didAutoSync = true
-                    Task { await environment.refreshTheol(userInitiated: false) }
+                    Task {
+                        if environment.theolSlice.provenance.refreshState == .never {
+                            await environment.refreshTheol(userInitiated: false)
+                        }
+                        if environment.sjcxSlice.provenance.refreshState == .never {
+                            await environment.refreshSjcx(userInitiated: false)
+                        }
+                    }
                 }
             }
         }
     }
 
+    private func refreshHomeworkSources(userInitiated: Bool) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await environment.refreshTheol(userInitiated: userInitiated) }
+            if environment.currentProfile?.systemType == .undergradJwglxt {
+                group.addTask { await environment.refreshSjcx(userInitiated: userInitiated) }
+            }
+        }
+    }
+
     private var visibleHomeworks: [TheolHomeworkItem] {
-        (environment.theolSlice.data?.homeworks ?? [])
-            .filter { !environment.theolFilterPrefs.hiddenHomeworkIds.contains($0.id) }
+        (environment.theolSlice.data?.homeworks ?? []).filter {
+            !environment.theolFilterPrefs.hiddenHomeworkIds.contains($0.id)
+                && !environment.theolFilterPrefs.isCourseHidden($0.courseName)
+        }
     }
 
     private var visibleTests: [TheolTestItem] {
-        (environment.theolSlice.data?.tests ?? [])
-            .filter { !environment.theolFilterPrefs.hiddenTestKeys.contains($0.id) }
+        (environment.theolSlice.data?.tests ?? []).filter {
+            !environment.theolFilterPrefs.hiddenTestKeys.contains($0.id)
+                && !environment.theolFilterPrefs.isCourseHidden($0.courseName)
+        }
+    }
+
+    private var visibleExperiments: [SjcxReportItem] {
+        (environment.sjcxSlice.data?.reports ?? []).filter {
+            !environment.theolFilterPrefs.hiddenExperimentIds.contains($0.id)
+                && !environment.theolFilterPrefs.isCourseHidden($0.courseName)
+        }
     }
 
     @ViewBuilder
     private var pendingContent: some View {
         let pendingHw = visibleHomeworks.filter { $0.canSubmit }
         let pendingTests = visibleTests.filter { $0.canStart }
+        let pendingExps = visibleExperiments.filter { !$0.isSubmitted }
         let pendingLocal = environment.localTodos.filter { !$0.completed }
 
-        if pendingHw.isEmpty && pendingTests.isEmpty && pendingLocal.isEmpty {
+        if pendingHw.isEmpty && pendingTests.isEmpty && pendingExps.isEmpty && pendingLocal.isEmpty {
             emptyStateCard(
                 environment.theolSlice.provenance.refreshState == .never
-                    ? "尚未同步北化在线，请点击右上角刷新"
-                    : "太棒了，当前没有待提交作业或测验！"
+                    ? "尚未同步北化在线与实践教学，请点击右上角刷新"
+                    : "太棒了，当前没有待提交作业、测验或实验报告！"
             )
         } else {
             ForEach(pendingLocal) { todo in
@@ -151,6 +219,9 @@ struct HomeworkView: View {
             }
             ForEach(pendingTests) { test in
                 testCard(test)
+            }
+            ForEach(pendingExps) { exp in
+                experimentCard(exp)
             }
         }
     }
@@ -178,9 +249,41 @@ struct HomeworkView: View {
     }
 
     @ViewBuilder
+    private var experimentsContent: some View {
+        Button {
+            showPracticeCenter = true
+        } label: {
+            HStack {
+                Label("前往实践教学中心（排课 / 成绩 / 讲座）", systemImage: "flask.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.teal)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(12)
+            .buctGlassCard(cornerRadius: 16, interactive: true, enabled: environment.appearance.liquidGlassEnabled)
+        }
+        .buttonStyle(.plain)
+
+        if visibleExperiments.isEmpty {
+            emptyStateCard(
+                environment.sjcxSlice.provenance.refreshState == .never
+                    ? "尚未同步实践教学实验报告，请下拉刷新"
+                    : "暂无实验报告记录"
+            )
+        } else {
+            ForEach(visibleExperiments) { exp in
+                experimentCard(exp)
+            }
+        }
+    }
+
+    @ViewBuilder
     private var localContent: some View {
         if environment.localTodos.isEmpty {
-            emptyStateCard("暂无本地待办，点击右上角 + 添加")
+            emptyStateCard("暂无本地待办，点击右上角 + 添加或从 CSV 导入")
         } else {
             ForEach(environment.localTodos) { todo in
                 localTodoCard(todo)
@@ -193,12 +296,18 @@ struct HomeworkView: View {
             selectedHomework = item
         } label: {
             VStack(alignment: .leading, spacing: 6) {
-                HStack {
+                HStack(spacing: 6) {
                     Text(item.courseName)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Color.accentColor)
+                        .lineLimit(1)
                     Spacer()
                     deadlineBadge(millis: item.deadlineMillis, status: item.status, canAct: item.canSubmit, completed: item.hasResult)
+                    cardFilterMenu(
+                        hideLabel: "隐藏此作业",
+                        courseName: item.courseName,
+                        onHideItem: { Task { await environment.hideTheolHomework(id: item.id) } }
+                    )
                 }
                 Text(item.title)
                     .font(.subheadline.weight(.semibold))
@@ -228,6 +337,11 @@ struct HomeworkView: View {
             Button("隐藏此作业", role: .destructive) {
                 Task { await environment.hideTheolHomework(id: item.id) }
             }
+            if !item.courseName.isEmpty {
+                Button("拉黑课程「\(item.courseName)」", role: .destructive) {
+                    Task { await environment.blacklistCourse(item.courseName) }
+                }
+            }
         }
     }
 
@@ -236,12 +350,18 @@ struct HomeworkView: View {
             selectedTest = item
         } label: {
             VStack(alignment: .leading, spacing: 6) {
-                HStack {
+                HStack(spacing: 6) {
                     Text("\(item.courseName) · 测验")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.purple)
+                        .lineLimit(1)
                     Spacer()
                     deadlineBadge(millis: item.endTimeMillis, status: item.status, canAct: item.canStart, completed: item.hasResult)
+                    cardFilterMenu(
+                        hideLabel: "隐藏此测验",
+                        courseName: item.courseName,
+                        onHideItem: { Task { await environment.hideTheolTest(key: item.id) } }
+                    )
                 }
                 Text(item.title)
                     .font(.subheadline.weight(.semibold))
@@ -262,6 +382,105 @@ struct HomeworkView: View {
             Button("隐藏此测验", role: .destructive) {
                 Task { await environment.hideTheolTest(key: item.id) }
             }
+            if !item.courseName.isEmpty {
+                Button("拉黑课程「\(item.courseName)」", role: .destructive) {
+                    Task { await environment.blacklistCourse(item.courseName) }
+                }
+            }
+        }
+    }
+
+    private func experimentCard(_ item: SjcxReportItem) -> some View {
+        Button {
+            showPracticeCenter = true
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text("\(item.courseName) · 实验")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.teal)
+                        .lineLimit(1)
+                    Spacer()
+                    let statusColor: Color = item.isSubmitted ? .green : .orange
+                    Text(item.stateText.isEmpty ? (item.isSubmitted ? "已提交" : "未提交") : item.stateText)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(statusColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(statusColor.opacity(0.14), in: Capsule())
+                    cardFilterMenu(
+                        hideLabel: "隐藏此实验",
+                        courseName: item.courseName,
+                        onHideItem: { Task { await environment.hideExperiment(id: item.id) } }
+                    )
+                }
+
+                Text(item.expName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+
+                HStack {
+                    if !item.submitTime.isEmpty {
+                        Label("提交于 \(item.submitTime)", systemImage: "clock")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } else if !item.templateName.isEmpty {
+                        Label("模板：\(item.templateName)", systemImage: "doc.text")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    if !item.scoreText.isEmpty {
+                        Text("成绩：\(item.scoreText)")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if !item.opinion.isEmpty {
+                    Text("评语：\(item.opinion)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .buctGlassCard(cornerRadius: 18, interactive: true, enabled: environment.appearance.liquidGlassEnabled)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("隐藏此实验", role: .destructive) {
+                Task { await environment.hideExperiment(id: item.id) }
+            }
+            if !item.courseName.isEmpty {
+                Button("拉黑课程「\(item.courseName)」", role: .destructive) {
+                    Task { await environment.blacklistCourse(item.courseName) }
+                }
+            }
+        }
+    }
+
+    private func cardFilterMenu(
+        hideLabel: String,
+        courseName: String,
+        onHideItem: @escaping () -> Void
+    ) -> some View {
+        Menu {
+            Button(hideLabel, role: .destructive, action: onHideItem)
+            if !courseName.isEmpty {
+                Button("拉黑课程「\(courseName)」", role: .destructive) {
+                    Task { await environment.blacklistCourse(courseName) }
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
         }
     }
 
@@ -622,6 +841,140 @@ private struct AddLocalTodoSheet: View {
                         }
                     }
                     .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+}
+
+private struct HomeworkFilterManageSheet: View {
+    @Environment(AppEnvironment.self) private var environment
+    @Environment(\.dismiss) private var dismiss
+
+    private var allKnownCourseNames: [String] {
+        var set = Set<String>()
+        for hw in environment.theolSlice.data?.homeworks ?? [] where !hw.courseName.isEmpty {
+            set.insert(hw.courseName)
+        }
+        for test in environment.theolSlice.data?.tests ?? [] where !test.courseName.isEmpty {
+            set.insert(test.courseName)
+        }
+        for exp in environment.sjcxSlice.data?.reports ?? [] where !exp.courseName.isEmpty {
+            set.insert(exp.courseName)
+        }
+        for c in environment.theolSlice.data?.courses ?? [] where !c.courseName.isEmpty {
+            set.insert(c.courseName)
+        }
+        return set.sorted()
+    }
+
+    private var blacklistedCourses: [String] {
+        environment.theolFilterPrefs.hiddenCourseNames.sorted()
+    }
+
+    private var availableToBlacklist: [String] {
+        allKnownCourseNames.filter { !environment.theolFilterPrefs.hiddenCourseNames.contains($0) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("课程黑名单（已屏蔽 \(blacklistedCourses.count) 门）") {
+                    if blacklistedCourses.isEmpty {
+                        Text("暂无拉黑课程。可在作业/测验/实验卡片右上角「...」菜单或长按拉黑，也可在下方直接添加。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(blacklistedCourses, id: \.self) { name in
+                            HStack {
+                                Text(name)
+                                    .font(.subheadline)
+                                Spacer()
+                                Button("恢复") {
+                                    Task { await environment.unblacklistCourse(name) }
+                                }
+                                .font(.caption.weight(.semibold))
+                            }
+                        }
+                    }
+
+                    if !availableToBlacklist.isEmpty {
+                        Menu("将课程加入黑名单") {
+                            ForEach(availableToBlacklist, id: \.self) { name in
+                                Button(name, role: .destructive) {
+                                    Task { await environment.blacklistCourse(name) }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let hiddenHw = Array(environment.theolFilterPrefs.hiddenHomeworkIds).sorted()
+                let hiddenTests = Array(environment.theolFilterPrefs.hiddenTestKeys).sorted()
+                let hiddenExps = Array(environment.theolFilterPrefs.hiddenExperimentIds).sorted()
+
+                if !hiddenHw.isEmpty || !hiddenTests.isEmpty || !hiddenExps.isEmpty {
+                    Section("已隐藏的单条任务") {
+                        ForEach(hiddenHw, id: \.self) { id in
+                            let title = environment.theolSlice.data?.homeworks.first(where: { $0.id == id })?.title ?? "作业 \(id)"
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("作业").font(.caption2).foregroundStyle(Color.accentColor)
+                                    Text(title).font(.subheadline)
+                                }
+                                Spacer()
+                                Button("恢复") {
+                                    Task { await environment.unhideTheolHomework(id: id) }
+                                }
+                                .font(.caption.weight(.semibold))
+                            }
+                        }
+
+                        ForEach(hiddenTests, id: \.self) { id in
+                            let title = environment.theolSlice.data?.tests.first(where: { $0.id == id })?.title ?? "测验 \(id)"
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("测验").font(.caption2).foregroundStyle(.purple)
+                                    Text(title).font(.subheadline)
+                                }
+                                Spacer()
+                                Button("恢复") {
+                                    Task { await environment.unhideTheolTest(key: id) }
+                                }
+                                .font(.caption.weight(.semibold))
+                            }
+                        }
+
+                        ForEach(hiddenExps, id: \.self) { id in
+                            let title = environment.sjcxSlice.data?.reports.first(where: { $0.id == id })?.expName ?? "实验 \(id)"
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("实验").font(.caption2).foregroundStyle(.teal)
+                                    Text(title).font(.subheadline)
+                                }
+                                Spacer()
+                                Button("恢复") {
+                                    Task { await environment.unhideExperiment(id: id) }
+                                }
+                                .font(.caption.weight(.semibold))
+                            }
+                        }
+                    }
+                }
+
+                if environment.theolFilterPrefs.totalHiddenCount > 0 {
+                    Section {
+                        Button("清空所有黑名单与隐藏记录", role: .destructive) {
+                            Task { await environment.clearAllTheolFilters() }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("过滤与课程黑名单")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { dismiss() }
                 }
             }
         }

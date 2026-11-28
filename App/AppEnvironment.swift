@@ -121,7 +121,7 @@ public final class AppEnvironment {
     }
 
     public var editionLabel: String {
-        edition == "widgets" ? "完整小组件版 (com.buct.one.full)" : "标准无扩展版 (com.buct.one)"
+        "标准版 (com.buct.one)"
     }
 
     public var firstWeekMonday: String {
@@ -422,13 +422,22 @@ public final class AppEnvironment {
 
     public var visiblePendingTodoCount: Int {
         let hwCount = (theolSlice.data?.homeworks ?? []).filter {
-            $0.canSubmit && !theolFilterPrefs.hiddenHomeworkIds.contains($0.id)
+            $0.canSubmit
+                && !theolFilterPrefs.hiddenHomeworkIds.contains($0.id)
+                && !theolFilterPrefs.isCourseHidden($0.courseName)
         }.count
         let testCount = (theolSlice.data?.tests ?? []).filter {
-            $0.canStart && !theolFilterPrefs.hiddenTestKeys.contains($0.id)
+            $0.canStart
+                && !theolFilterPrefs.hiddenTestKeys.contains($0.id)
+                && !theolFilterPrefs.isCourseHidden($0.courseName)
+        }.count
+        let expCount = (sjcxSlice.data?.reports ?? []).filter {
+            !$0.isSubmitted
+                && !theolFilterPrefs.hiddenExperimentIds.contains($0.id)
+                && !theolFilterPrefs.isCourseHidden($0.courseName)
         }.count
         let localCount = localTodos.filter { !$0.completed }.count
-        return hwCount + testCount + localCount
+        return hwCount + testCount + expCount + localCount
     }
 
     public func refreshJwNotice(userInitiated: Bool = true) async {
@@ -516,10 +525,69 @@ public final class AppEnvironment {
         await campusSync.saveTheolFilterPrefs(theolFilterPrefs, profile: profile)
     }
 
+    public func unhideTheolHomework(id: String) async {
+        guard let profile = currentProfile else { return }
+        theolFilterPrefs.hiddenHomeworkIds.remove(id)
+        await campusSync.saveTheolFilterPrefs(theolFilterPrefs, profile: profile)
+    }
+
     public func hideTheolTest(key: String) async {
         guard let profile = currentProfile else { return }
         theolFilterPrefs.hiddenTestKeys.insert(key)
         await campusSync.saveTheolFilterPrefs(theolFilterPrefs, profile: profile)
+    }
+
+    public func unhideTheolTest(key: String) async {
+        guard let profile = currentProfile else { return }
+        theolFilterPrefs.hiddenTestKeys.remove(key)
+        await campusSync.saveTheolFilterPrefs(theolFilterPrefs, profile: profile)
+    }
+
+    public func hideExperiment(id: String) async {
+        guard let profile = currentProfile else { return }
+        theolFilterPrefs.hiddenExperimentIds.insert(id)
+        await campusSync.saveTheolFilterPrefs(theolFilterPrefs, profile: profile)
+    }
+
+    public func unhideExperiment(id: String) async {
+        guard let profile = currentProfile else { return }
+        theolFilterPrefs.hiddenExperimentIds.remove(id)
+        await campusSync.saveTheolFilterPrefs(theolFilterPrefs, profile: profile)
+    }
+
+    public func blacklistCourse(_ courseName: String) async {
+        guard let profile = currentProfile else { return }
+        let trimmed = courseName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        theolFilterPrefs.hiddenCourseNames.insert(trimmed)
+        await campusSync.saveTheolFilterPrefs(theolFilterPrefs, profile: profile)
+    }
+
+    public func unblacklistCourse(_ courseName: String) async {
+        guard let profile = currentProfile else { return }
+        theolFilterPrefs.hiddenCourseNames.remove(courseName)
+        await campusSync.saveTheolFilterPrefs(theolFilterPrefs, profile: profile)
+    }
+
+    public func clearAllTheolFilters() async {
+        guard let profile = currentProfile else { return }
+        theolFilterPrefs = TheolFilterPrefs()
+        await campusSync.saveTheolFilterPrefs(theolFilterPrefs, profile: profile)
+    }
+
+    public func importTasksAndExams(tasks: [ImportedTaskDraft], exams: [ImportedExamDraft]) async {
+        guard let profile = currentProfile else { return }
+        if !tasks.isEmpty {
+            let newTodos = tasks.map { $0.toLocalTodo() }
+            localTodos.insert(contentsOf: newTodos, at: 0)
+            await campusSync.saveLocalTodos(localTodos, profile: profile)
+        }
+        if !exams.isEmpty {
+            let newExams = exams.map { $0.toExamItem() }
+            customExams.append(contentsOf: newExams)
+            try? await syncService.saveCustomExams(customExams, profile: profile)
+            await rescheduleReminders()
+        }
     }
 
     public func refreshMail(userInitiated: Bool = true) async {
